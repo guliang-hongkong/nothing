@@ -1,0 +1,162 @@
+# Island's forum · 离岛的论坛
+
+一个黑白极简的社区网站：支持注册登录、发帖、回复、点赞、搜索、个人主页和实时私聊。同一套代码会自动识别手机或电脑，并适配桌面网页与手机浏览器，也可安装到主屏幕（PWA）。
+
+项目只使用 Node.js 内置模块，**没有第三方运行时依赖**，不需要执行 `npm install`。
+
+![桌面端首页](shots/desktop-home.png)
+
+<p align="center">
+  <img src="shots/mobile-home.png" alt="手机端首页" width="260">
+  &nbsp;&nbsp;
+  <img src="shots/mobile-chat.png" alt="手机端私信" width="260">
+</p>
+
+## 功能
+
+- **账号体系**：注册、登录、退出；密码使用 `scrypt` 加盐哈希，会话使用 HttpOnly + SameSite Cookie。
+- **话题广场**：五个板块、置顶、最新 / 热门 / 等待回应排序、分页加载。
+- **发帖与回复**：标题与正文校验，草稿自动保存在本地，发布后直接进入话题页。
+- **点赞与搜索**：话题、回复都可以点赞；支持按标题、正文、作者昵称搜索。
+- **实时私信**：从作者头像或主页发起私信，SSE 实时推送新消息，未读数同步到导航栏和手机底栏。
+- **个人主页**：昵称、简介、加入时间、话题 / 回复 / 收到的赞，以及最近发布的话题。
+- **管理员**：`island` 账号可以在任意话题页删除帖子；删除前有二次确认，并会一并清理回复和点赞。
+- **自动识别设备**：结合 UA、触屏能力和视口宽度标记手机 / 平板 / 电脑，自动切换为对应的布局与交互。
+- **手机体验**：响应式布局、底部标签栏、移动端全屏私信、安全区适配、输入框防 iOS 缩放。
+- **黑白界面**：纯黑白灰视觉系统，支持同样黑白的深色模式。
+- **PWA**：可安装到桌面或主屏幕，带离线应用外壳和快捷方式。
+
+## 快速启动
+
+要求 **Node.js 24+**（需要内置的 `node:sqlite`）。
+
+```bash
+cd forum-app
+npm start
+```
+
+打开 <http://127.0.0.1:3000>。
+
+访客账号：
+
+| 用户名 | 密码 | 昵称 |
+| --- | --- | --- |
+| `linwan` | `demo1234` | 林晚 |
+| `ache` | `demo1234` | 阿澈 |
+| `xiaoman` | `demo1234` | 小满 |
+| `chenmo` | `demo1234` | 陈默 |
+| `shanzhi` | `demo1234` | 山栀 |
+
+也可以在页面上直接注册新账号。
+
+管理员账号：
+
+| 用户名 | 密码 | 昵称 | 权限 |
+| --- | --- | --- | --- |
+| `island` | `qwE12qwE1` | 离岛 | 删除任意话题 |
+
+> 服务启动时会自动确保该管理员账号存在；登录后进入任意话题页，即可在操作栏看到「删除帖子」。
+
+### 用手机访问
+
+服务默认监听 `0.0.0.0`，启动时会打印局域网地址，例如：
+
+```text
+局域网(手机)访问: http://192.168.x.x:3000
+```
+
+让手机和电脑连接同一个 Wi-Fi，在手机浏览器打开这个地址即可。若要使用「添加到主屏幕」和离线能力，需要 HTTPS（`localhost` 除外）；普通局域网 HTTP 仍可正常浏览和使用全部论坛功能。
+
+## 配置
+
+通过环境变量覆盖默认值：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PORT` | `3000` | HTTP 端口 |
+| `HOST` | `0.0.0.0` | 监听地址 |
+| `DB_PATH` | `data/forum.db` | SQLite 数据库路径 |
+| `SEED` | `true` | 首次启动时是否写入演示数据 |
+
+示例：
+
+```bash
+PORT=8080 DB_PATH=./data/forum.db npm start
+```
+
+### 重置演示数据
+
+停止服务后删除数据库文件，再启动即可重新生成：
+
+```bash
+rm -f data/forum.db data/forum.db-shm data/forum.db-wal
+npm start
+```
+
+## 测试
+
+```bash
+npm test
+```
+
+测试会在临时目录创建独立的 SQLite 数据库，覆盖注册、登录、发帖、回复、点赞、搜索、私信、未读数、SSE 实时推送、管理员权限与删帖、退出登录，不会影响正式数据。
+
+## 目录结构
+
+```text
+forum-app/
+├─ server.js              # 启动入口、端口与优雅退出
+├─ src/
+│  ├─ app.js              # HTTP 服务、REST API、SSE、静态资源
+│  ├─ db.js               # SQLite 表结构、迁移与演示数据
+│  └─ security.js         # scrypt 密码哈希、会话 token、头像配色
+├─ public/
+│  ├─ index.html          # 单页应用外壳与 SVG 图标集
+│  ├─ styles.css          # 桌面 / 手机响应式视觉系统
+│  ├─ app.js              # 路由、页面渲染与交互
+│  ├─ theme-init.js       # 首屏避免主题闪烁
+│  ├─ manifest.webmanifest
+│  ├─ sw.js               # 离线缓存 Service Worker
+│  └─ icons/              # PWA 图标
+├─ tests/api.test.js
+└─ data/forum.db          # 运行时生成，不提交
+```
+
+## API 一览
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/api/auth/register` | 注册并自动登录 |
+| `POST` | `/api/auth/login` | 登录 |
+| `POST` | `/api/auth/logout` | 退出登录 |
+| `GET` | `/api/auth/me` | 当前用户与未读数 |
+| `GET` | `/api/categories` | 板块列表 |
+| `GET` | `/api/topics` | 话题列表（`q`、`category`、`sort`、`page`） |
+| `POST` | `/api/topics` | 发布话题 |
+| `GET` | `/api/topics/:id` | 话题详情与回复 |
+| `POST` | `/api/topics/:id/replies` | 回复话题 |
+| `POST` | `/api/topics/:id/like` | 点赞 / 取消点赞话题 |
+| `POST` | `/api/topics/:id/delete` | 管理员删除话题及其回复 |
+| `POST` | `/api/replies/:id/like` | 点赞 / 取消点赞回复 |
+| `GET` | `/api/users/:id` | 公开个人主页 |
+| `GET` | `/api/users?q=` | 搜索用户（需登录） |
+| `GET` | `/api/conversations` | 私信会话列表 |
+| `POST` | `/api/conversations` | 创建或获取与某人的会话 |
+| `GET` | `/api/conversations/:id/messages` | 会话消息 |
+| `POST` | `/api/conversations/:id/messages` | 发送私信 |
+| `POST` | `/api/conversations/:id/read` | 标记会话已读 |
+| `GET` | `/api/events` | SSE 实时消息事件 |
+| `GET` | `/api/stats` | 社区统计与最近活跃用户 |
+
+## 安全与部署说明
+
+- 密码不存明文；会话 token 只存 SHA-256 摘要，原始 token 放在 HttpOnly Cookie 中。
+- 所有写操作要求 `Content-Type: application/json`，并校验同源 `Origin`，配合 SameSite Cookie 降低 CSRF 风险。
+- 登录、注册、发帖、回复、私信均有简单的内存速率限制。
+- 用户输入由前端统一转义后渲染，服务端使用参数化 SQL，避免 XSS 与 SQL 注入。
+- 部署到公网时建议放在 Caddy / Nginx 之后并启用 HTTPS；为实时私信保留 SSE 的长连接（关闭代理缓冲）。
+- 当前版本面向单机小型社区：SQLite 使用 WAL，适合“读多写少”。如果要承载大规模并发或做多实例部署，需要替换为独立数据库、Redis 会话/限流与消息队列。
+
+## 说明
+
+「离岛」是虚构的演示社区，种子内容与人物均为示例数据。你可以直接替换 `src/db.js` 中的板块、访客用户与话题，开始自己的社区。

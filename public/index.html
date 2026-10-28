@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Island's forum · 离岛的论坛</title>
+  <meta name="description" content="Island's forum（离岛的论坛）是一个可以慢慢说话的地方。分享日常、记录灵感、认识有趣的人，也可以给喜欢的人发一条私信。">
+  <meta name="theme-color" content="#f2f2f2">
+  <meta name="color-scheme" content="light dark">
+  <meta name="application-name" content="离岛">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="离岛">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="alternate icon" href="/icons/favicon.ico" sizes="64x64">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <script src="/theme-init.js"></script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+
+  <svg class="icon-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-home" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 10.6 12 3.5l8.5 7.1"/><path d="M5.5 9.3v10.2h13V9.3"/><path d="M9.6 19.5v-6h4.8v6"/></g></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10.8" cy="10.8" r="6.6"/><path d="m16 16 4.3 4.3"/></g></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></g></symbol>
+    <symbol id="i-message" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 11.2a7.7 7.7 0 0 1-8 7.4 9.1 9.1 0 0 1-2.6-.4l-4.6 1.5 1.4-4.1a7 7 0 0 1-1.2-4A7.7 7.7 0 0 1 13.5 4a7.5 7.5 0 0 1 7 7.2Z"/></g></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="8" r="3.8"/><path d="M4.8 20.2c.5-3.5 3.3-5.7 7.2-5.7s6.7 2.2 7.2 5.7"/></g></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="9" cy="8.3" r="3.2"/><path d="M3 19.7c.4-3.1 2.8-5 6-5s5.6 1.9 6 5"/><path d="M15.4 5.4a3.1 3.1 0 0 1 0 5.9M17.3 15c2.3.5 3.7 2.2 4 4.7"/></g></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20.2S3.8 15.6 3.8 9.6A4.4 4.4 0 0 1 12 6.8a4.4 4.4 0 0 1 8.2 2.8c0 6-8.2 10.6-8.2 10.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.8 12S6.5 5.8 12 5.8 21.2 12 21.2 12 17.5 18.2 12 18.2 2.8 12 2.8 12Z"/><circle cx="12" cy="12" r="2.8"/></g></symbol>
+    <symbol id="i-reply" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 7.5 4 12l5.5 4.5"/><path d="M4.5 12h8.3c4.2 0 6.7 2.2 6.7 6.5"/></g></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21 3.8-7 16.4-3.2-6.9-7-3.1L21 3.8Z"/><path d="M10.8 13.3 21 3.8"/></g></symbol>
+    <symbol id="i-arrow-left" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12H4"/><path d="m10 6-6 6 6 6"/></g></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></g></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/></g></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.2 15.2A8.3 8.3 0 0 1 8.8 3.8a8.3 8.3 0 1 0 11.4 11.4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 8V5.5a1.8 1.8 0 0 0-1.8-1.8H5.8A1.8 1.8 0 0 0 4 5.5v13a1.8 1.8 0 0 0 1.8 1.8h6.4a1.8 1.8 0 0 0 1.8-1.8V16"/><path d="M9.5 12H21M17.5 8.5 21 12l-3.5 3.5"/></g></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15.4 4.6a2.2 2.2 0 1 1 3.1 3.1L8.2 18l-4.4 1.2L5 14.8 15.4 4.6Z"/><path d="m14 6 3.1 3.1"/></g></symbol>
+    <symbol id="i-install" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11M7.8 10.6 12 14.8l4.2-4.2"/><path d="M4.5 16.5v2.2a1.8 1.8 0 0 0 1.8 1.8h11.4a1.8 1.8 0 0 0 1.8-1.8v-2.2"/></g></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 9.5a6 6 0 0 0-12 0c0 6.2-2 7-2 7h16s-2-.8-2-7Z"/><path d="M9.8 20a2.5 2.5 0 0 0 4.4 0"/></g></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4.5" y="10.2" width="15" height="10.3" rx="2.2"/><path d="M8 10V7.7a4 4 0 0 1 8 0V10"/></g></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 2.8c.8 5.5 3.4 8.1 8.9 8.9-5.5.8-8.1 3.4-8.9 8.9-.8-5.5-3.4-8.1-8.9-8.9 5.5-.8 8.1-3.4 8.9-8.9Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.4 4.3L19 7.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M10 13.9a4.2 4.2 0 0 0 6 0l2.7-2.7a4.2 4.2 0 0 0-6-6L11 6.9"/><path d="M14 10.1a4.2 4.2 0 0 0-6 0l-2.7 2.7a4.2 4.2 0 0 0 6 6l1.7-1.7"/></g></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m8 7-5 5 5 5M16 7l5 5-5 5M13.6 4.5l-3.2 15"/></g></symbol>
+    <symbol id="i-leaf" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 3.5C11 3.3 4.5 7.3 4.5 14.2a5.6 5.6 0 0 0 5.6 5.6c6.8 0 10.2-6.6 10.4-16.3Z"/><path d="M4 21c2.4-5.2 5.9-8.3 10.8-10.4"/></g></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.8"/><path d="M9.6 9.2a2.6 2.6 0 0 1 5 .9c0 1.8-2.6 2.1-2.6 3.9"/><path d="M12 17.5h.01"/></g></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 11.2a7.7 7.7 0 0 1-8 7.4 9.1 9.1 0 0 1-2.6-.4l-4.6 1.5 1.4-4.1a7 7 0 0 1-1.2-4A7.7 7.7 0 0 1 13.5 4a7.5 7.5 0 0 1 7 7.2Z"/><path d="M9 10.5h7M9 13.5h4"/></g></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><g fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></g></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4v5h-5"/><path d="M19.2 14.5A8 8 0 1 1 18 7l2 2"/></g></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4.5h6V7"/><path d="m6.2 7 .9 12.5h9.8L17.8 7"/><path d="M10 10.8v5.2M14 10.8v5.2"/></g></symbol>
+  </svg>
+
+  <header class="topbar" id="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/" data-link aria-label="Island's forum 离岛的论坛首页">
+        <span class="brand-mark" aria-hidden="true">岛</span>
+        <span class="brand-text">
+          <strong><span class="brand-full">Island's forum</span><span class="brand-short">Island's</span></strong>
+          <small>离岛的论坛</small>
+        </span>
+      </a>
+
+      <nav class="desktop-nav" aria-label="主导航">
+        <a href="/" data-link data-nav="home">广场</a>
+        <a href="/messages" data-link data-nav="messages">
+          私信
+          <span class="nav-badge" data-unread-badge hidden></span>
+        </a>
+      </nav>
+
+      <form class="header-search" id="header-search" role="search">
+        <svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>
+        <input type="search" name="q" placeholder="搜索话题、作者" autocomplete="off" aria-label="搜索话题和作者">
+        <kbd>↵</kbd>
+      </form>
+
+      <div class="header-actions">
+        <button class="icon-button install-button" type="button" data-action="install" title="安装到桌面" aria-label="安装到桌面" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#i-install"></use></svg>
+        </button>
+        <button class="icon-button theme-toggle" type="button" data-action="toggle-theme" aria-label="切换深色模式" title="切换深色模式">
+          <svg class="icon theme-icon-sun" aria-hidden="true"><use href="#i-sun"></use></svg>
+          <svg class="icon theme-icon-moon" aria-hidden="true"><use href="#i-moon"></use></svg>
+        </button>
+        <div id="auth-slot" class="auth-slot"></div>
+      </div>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <div class="boot-loading" role="status" aria-live="polite" aria-label="正在载入 Island's forum">
+      <div class="boot-brand">
+        <span class="boot-emblem" aria-hidden="true"><span class="loading-mark">岛</span></span>
+        <span class="boot-brand-text">
+          <strong>Island's forum</strong>
+          <small>离岛的论坛</small>
+        </span>
+      </div>
+      <div class="boot-progress" aria-hidden="true"><span></span></div>
+      <span class="boot-note">正在登岛…</span>
+    </div>
+  </main>
+
+  <nav class="mobile-tabbar" aria-label="移动端导航">
+    <a href="/" data-link data-nav="home" aria-label="首页">
+      <svg class="icon" aria-hidden="true"><use href="#i-home"></use></svg>
+      <span>广场</span>
+    </a>
+    <a href="/search" data-link data-nav="search" aria-label="搜索">
+      <svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>
+      <span>发现</span>
+    </a>
+    <button class="tab-compose" type="button" data-action="compose" aria-label="发布话题">
+      <span class="tab-compose-inner"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg></span>
+      <span>发布</span>
+    </button>
+    <a href="/messages" data-link data-nav="messages" aria-label="私信">
+      <span class="tab-icon-wrap">
+        <svg class="icon" aria-hidden="true"><use href="#i-message"></use></svg>
+        <span class="tab-badge" data-unread-badge hidden></span>
+      </span>
+      <span>私信</span>
+    </a>
+    <button type="button" data-action="my-profile" data-nav="profile" aria-label="我的主页">
+      <svg class="icon" aria-hidden="true"><use href="#i-user"></use></svg>
+      <span>我的</span>
+    </button>
+  </nav>
+
+  <div id="modal-root"></div>
+  <div id="toast-root" class="toast-root" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

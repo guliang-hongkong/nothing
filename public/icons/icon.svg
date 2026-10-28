@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Island's forum 离岛的论坛">
+  <rect width="512" height="512" rx="116" fill="#0a0a0a"/>
+  <circle cx="256" cy="256" r="172" fill="none" stroke="#ffffff" stroke-opacity=".18" stroke-width="2"/>
+  <circle cx="256" cy="256" r="138" fill="none" stroke="#ffffff" stroke-opacity=".1" stroke-width="1.5"/>
+  <text x="256" y="327" text-anchor="middle" font-family="'Noto Serif SC','Songti SC','STSong','SimSun',serif" font-size="244" font-weight="700" fill="#ffffff">岛</text>
+  <rect x="178" y="372" width="156" height="4" rx="2" fill="#ffffff"/>
+  <rect x="146" y="373" width="7" height="4" fill="#ffffff" fill-opacity=".4"/>
+  <rect x="359" y="373" width="7" height="4" fill="#ffffff" fill-opacity=".4"/>
+</svg>
