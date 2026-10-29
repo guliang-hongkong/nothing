@@ -40,6 +40,22 @@ function migrate(db) {
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
 
+    CREATE TABLE IF NOT EXISTS password_resets (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'approved', 'rejected', 'completed', 'expired')),
+      note TEXT NOT NULL DEFAULT '',
+      requested_at TEXT NOT NULL,
+      reviewed_at TEXT,
+      reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      used_at TEXT,
+      expires_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id, requested_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_password_resets_status ON password_resets(status, requested_at DESC);
+
     CREATE TABLE IF NOT EXISTS categories (
       id TEXT PRIMARY KEY,
       slug TEXT NOT NULL UNIQUE,

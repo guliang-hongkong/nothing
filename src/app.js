@@ -16,6 +16,7 @@ const {
 
 const SESSION_COOKIE = 'islands_session';
 const SESSION_DAYS = 30;
+const PASSWORD_RESET_HOURS = 24;
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_MUSIC_BYTES = 25 * 1024 * 1024;
 const MUSIC_TYPES = {
@@ -770,6 +771,188 @@ function createForumServer(options = {}) {
         return;
       }
       sendJson(res, 200, { user: auth.user, summary: summaryFor(auth.user.id) });
+      return;
+    }
+
+    if (pathname === '/api/auth/password-reset/request' && method === 'POST') {
+      enforceRate(`password-reset:${getClientIp(req)}`, 6, 60 * 60 * 1000, res);
+      const body = await readJsonBody(req);
+      const username = cleanText(body.username, { label: '用户名', min: 1, max: 20, singleLine: true });
+      const user = db
+        .prepare('SELECT id, username, display_name, is_admin FROM users WHERE username_key = ?')
+        .get(username.toLowerCase());
+      if (!user) throw new HttpError(404, '账号不存在');
+      if (user.is_admin) throw new HttpError(400, '管理员账号请直接在服务器上重置');
+      enforceRate(`password-reset-user:${user.id}`, 3, 15 * 60 * 1000, res);
+
+      const token = createSessionToken();
+      const id = newId();
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + PASSWORD_RESET_HOURS * 60 * 60 * 1000);
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.prepare('DELETE FROM password_resets WHERE user_id = ? AND used_at IS NULL').run(user.id);
+        db.prepare(`
+          INSERT INTO password_resets (id, user_id, token_hash, status, note, requested_at, expires_at)
+          VALUES (?, ?, ?, 'pending', '', ?, ?)
+        `).run(id, user.id, hashToken(token), now.toISOString(), expiresAt.toISOString());
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+
+      const admin = getPrimaryAdmin();
+      if (admin && admin.id !== user.id) {
+        try {
+          createDirectMessage(
+            user.id,
+            admin.id,
+            `[密码重置申请]\n账号：@${user.username}\n昵称：${user.display_name}\n\n请前往「密码重置」页面核对身份后确认。`,
+          );
+        } catch (error) {
+          console.error('Failed to notify admin about password reset:', error);
+        }
+      }
+
+      sendJson(res, 201, {
+        token,
+        username: user.username,
+        expiresAt: expiresAt.toISOString(),
+      });
+      return;
+    }
+
+    if (pathname === '/api/auth/password-reset/status' && method === 'GET') {
+      const token = String(url.searchParams.get('token') || '').trim();
+      if (!token || token.length > 200) throw new HttpError(400, '重置链接无效');
+      const row = db
+        .prepare(`
+          SELECT r.*, u.username, u.display_name
+          FROM password_resets r JOIN users u ON u.id = r.user_id
+          WHERE r.token_hash = ?
+        `)
+        .get(hashToken(token));
+      if (!row) throw new HttpError(404, '申请不存在或已失效');
+
+      let status = row.status;
+      if ((status === 'pending' || status === 'approved') && row.expires_at <= new Date().toISOString()) {
+        db.prepare("UPDATE password_resets SET status = 'expired' WHERE id = ?").run(row.id);
+        status = 'expired';
+      }
+      sendJson(res, 200, {
+        request: {
+          status,
+          username: row.username,
+          displayName: row.display_name,
+          requestedAt: row.requested_at,
+          reviewedAt: row.reviewed_at,
+          reviewNote: row.note,
+          expiresAt: row.expires_at,
+        },
+      });
+      return;
+    }
+
+    if (pathname === '/api/auth/password-reset/complete' && method === 'POST') {
+      const body = await readJsonBody(req);
+      const token = cleanText(body.token, { label: '重置令牌', min: 10, max: 200, singleLine: true });
+      if (typeof body.password !== 'string') throw new HttpError(400, '请填写新密码');
+      if (body.password.length < 8) throw new HttpError(400, '新密码至少需要 8 个字符');
+      if (body.password.length > 128) throw new HttpError(400, '密码不能超过 128 个字符');
+      const row = db
+        .prepare(`
+          SELECT r.*, u.username
+          FROM password_resets r JOIN users u ON u.id = r.user_id
+          WHERE r.token_hash = ?
+        `)
+        .get(hashToken(token));
+      if (!row) throw new HttpError(404, '申请不存在或已失效');
+      if (row.used_at) throw new HttpError(409, '这次重置已经完成，请直接登录');
+      if (row.status !== 'approved') throw new HttpError(409, '管理员还没有确认这次申请');
+      const now = new Date().toISOString();
+      if (row.expires_at <= now) {
+        db.prepare("UPDATE password_resets SET status = 'expired' WHERE id = ?").run(row.id);
+        throw new HttpError(410, '申请已过期，请重新提交');
+      }
+
+      const passwordHash = await hashPassword(body.password);
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const updated = db
+          .prepare("UPDATE password_resets SET status = 'completed', used_at = ? WHERE id = ? AND status = 'approved' AND used_at IS NULL")
+          .run(now, row.id);
+        if (updated.changes !== 1) {
+          db.exec('ROLLBACK');
+          throw new HttpError(409, '这次重置已经完成，请直接登录');
+        }
+        db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, row.user_id);
+        db.prepare('DELETE FROM sessions WHERE user_id = ?').run(row.user_id);
+        db.exec('COMMIT');
+      } catch (error) {
+        try {
+          db.exec('ROLLBACK');
+        } catch {
+          // Already rolled back.
+        }
+        throw error;
+      }
+
+      sendJson(res, 200, { ok: true, username: row.username });
+      return;
+    }
+
+    if (pathname === '/api/admin/password-resets' && method === 'GET') {
+      const auth = requireAuth(req);
+      if (!auth.user.isAdmin) throw new HttpError(403, '只有管理员可以查看重置申请');
+      const now = new Date().toISOString();
+      db.prepare("UPDATE password_resets SET status = 'expired' WHERE status IN ('pending', 'approved') AND expires_at <= ?").run(now);
+      const pending = db
+        .prepare(`
+          SELECT r.id, r.status, r.note, r.requested_at, r.reviewed_at, r.expires_at, r.used_at,
+                 u.username, u.display_name, u.created_at AS user_created_at
+          FROM password_resets r JOIN users u ON u.id = r.user_id
+          WHERE r.status = 'pending'
+          ORDER BY r.requested_at ASC
+        `)
+        .all();
+      const recent = db
+        .prepare(`
+          SELECT r.id, r.status, r.note, r.requested_at, r.reviewed_at, r.expires_at, r.used_at,
+                 u.username, u.display_name, u.created_at AS user_created_at
+          FROM password_resets r JOIN users u ON u.id = r.user_id
+          WHERE r.status IN ('approved', 'rejected', 'completed', 'expired')
+          ORDER BY COALESCE(r.reviewed_at, r.used_at, r.requested_at) DESC
+          LIMIT 12
+        `)
+        .all();
+      sendJson(res, 200, { pending, recent });
+      return;
+    }
+
+    const passwordResetReviewMatch =
+      api[0] === 'admin' && api[1] === 'password-resets' && api[2] && api[3] === 'review' ? api[2] : null;
+    if (passwordResetReviewMatch && method === 'POST') {
+      const auth = requireAuth(req);
+      if (!auth.user.isAdmin) throw new HttpError(403, '只有管理员可以确认重置申请');
+      const body = await readJsonBody(req);
+      const decision = body.decision === 'approve' ? 'approved' : body.decision === 'reject' ? 'rejected' : null;
+      if (!decision) throw new HttpError(400, '请选择通过或拒绝');
+      const note = optionalText(body.note, { label: '说明', max: 200 });
+      const row = db.prepare('SELECT * FROM password_resets WHERE id = ?').get(passwordResetReviewMatch);
+      if (!row) throw new HttpError(404, '申请不存在');
+      if (row.status !== 'pending') throw new HttpError(409, '这条申请已经处理过了');
+      const now = new Date().toISOString();
+      if (row.expires_at <= now) {
+        db.prepare("UPDATE password_resets SET status = 'expired' WHERE id = ?").run(row.id);
+        throw new HttpError(410, '申请已过期');
+      }
+      db.prepare(`
+        UPDATE password_resets
+        SET status = ?, note = ?, reviewed_at = ?, reviewed_by = ?
+        WHERE id = ?
+      `).run(decision, decision === 'rejected' ? note || '管理员未通过本次申请' : note, now, auth.user.id, row.id);
+      sendJson(res, 200, { ok: true, status: decision });
       return;
     }
 

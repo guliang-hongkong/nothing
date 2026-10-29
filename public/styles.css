@@ -3738,6 +3738,328 @@ body.has-music-player .toast-root {
 }
 
 /* --------------------------------------------------------------------------
+   Password recovery and admin reset review
+   -------------------------------------------------------------------------- */
+
+.forgot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 13px;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.forgot-row .text-button {
+  flex: none;
+  font-size: 11.5px;
+}
+
+.forgot-loading {
+  padding: 28px 12px;
+  color: var(--faint);
+  font-size: 12px;
+  text-align: center;
+}
+
+.forgot-status {
+  padding-top: 8px;
+  text-align: center;
+}
+
+.forgot-status-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 13px;
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface-2);
+}
+
+.forgot-status-icon .icon {
+  width: 22px;
+  height: 22px;
+}
+
+.forgot-status-icon.is-approved {
+  color: var(--surface);
+  border-color: var(--ink);
+  background: var(--ink);
+}
+
+.forgot-status h3 {
+  font-family: var(--font-serif);
+  font-size: 20px;
+}
+
+.forgot-status p {
+  max-width: 360px;
+  margin: 7px auto 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.8;
+}
+
+.forgot-status .forgot-hint {
+  color: var(--faint);
+  font-size: 10.5px;
+}
+
+.forgot-progress {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: min(220px, 100%);
+  margin: 19px auto 4px;
+}
+
+.forgot-progress span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  color: var(--faint);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  font-size: 9.5px;
+}
+
+.forgot-progress span.is-done {
+  color: var(--surface);
+  border-color: var(--ink);
+  background: var(--ink);
+}
+
+.forgot-progress i {
+  width: 54px;
+  height: 1px;
+  flex: 1;
+  background: var(--line);
+}
+
+.forgot-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.forgot-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 16px;
+  padding: 9px 11px;
+  color: var(--faint);
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-2) 45%, transparent);
+  font-size: 10px;
+  line-height: 1.65;
+}
+
+.forgot-note .icon {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  margin-top: 1px;
+}
+
+.admin-page {
+  width: min(860px, 100%);
+  margin: 0 auto;
+}
+
+.admin-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 18px 0 22px;
+  padding: 11px 13px;
+  color: var(--muted);
+  border: 1px dashed var(--line-strong);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface) 48%, transparent);
+  font-size: 10.5px;
+  line-height: 1.7;
+}
+
+.admin-warning .icon {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  margin-top: 1px;
+}
+
+.admin-section {
+  margin-top: 22px;
+}
+
+.reset-request-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.reset-request {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 15px 17px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.reset-request-main {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+
+.reset-request-info {
+  min-width: 0;
+}
+
+.reset-request-info h3 {
+  overflow: hidden;
+  font-family: var(--font-serif);
+  font-size: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reset-request-info h3 span {
+  color: var(--faint);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.reset-request-info p {
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.reset-request-actions {
+  display: flex;
+  gap: 7px;
+  flex: none;
+}
+
+.admin-reset-empty {
+  min-height: 200px;
+}
+
+.reset-history {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.reset-history-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+}
+
+.reset-history-row:last-child {
+  border-bottom: 0;
+}
+
+.reset-history-user {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reset-history-user small {
+  color: var(--faint);
+  font-size: 9.5px;
+}
+
+.reset-history-status {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.reset-history-status.is-approved,
+.reset-history-status.is-completed {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.reset-history-status.is-rejected,
+.reset-history-status.is-expired {
+  color: var(--faint);
+}
+
+.reset-history-time {
+  width: 78px;
+  color: var(--faint);
+  font-size: 9.5px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.reset-history-empty {
+  padding: 18px;
+  font-size: 11px;
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .forgot-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .forgot-row span {
+    font-size: 9.5px;
+  }
+
+  .reset-request {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .reset-request-actions {
+    width: 100%;
+  }
+
+  .reset-request-actions .btn {
+    flex: 1;
+  }
+
+  .reset-history-time {
+    width: 60px;
+  }
+}
+
+/* --------------------------------------------------------------------------
    Forms and modals
    -------------------------------------------------------------------------- */
 

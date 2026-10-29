@@ -471,6 +471,90 @@ test('forum API supports the full member journey', async (t) => {
     assert.equal(deletedAudio.status, 404);
   });
 
+  await t.test('requires admin confirmation before a password can be reset', async () => {
+    const missingUser = await request(base, '/api/auth/password-reset/request', {
+      method: 'POST',
+      body: { username: 'nobody_here_404' },
+    });
+    assert.equal(missingUser.response.status, 404);
+
+    const adminRequest = await request(base, '/api/auth/password-reset/request', {
+      method: 'POST',
+      body: { username: 'island' },
+    });
+    assert.equal(adminRequest.response.status, 400);
+
+    const requested = await request(base, '/api/auth/password-reset/request', {
+      method: 'POST',
+      body: { username: 'test_beta' },
+    });
+    assert.equal(requested.response.status, 201);
+    assert.ok(requested.data.token);
+    const resetToken = requested.data.token;
+
+    const pending = await request(base, `/api/auth/password-reset/status?token=${encodeURIComponent(resetToken)}`);
+    assert.equal(pending.response.status, 200);
+    assert.equal(pending.data.request.status, 'pending');
+
+    const forbiddenList = await request(base, '/api/admin/password-resets', { cookie: users.beta.cookie });
+    assert.equal(forbiddenList.response.status, 403);
+
+    const adminList = await request(base, '/api/admin/password-resets', { cookie: users.admin.cookie });
+    assert.equal(adminList.response.status, 200);
+    const resetRequest = adminList.data.pending.find((item) => item.username === 'test_beta');
+    assert.ok(resetRequest);
+
+    const forbiddenReview = await request(base, `/api/admin/password-resets/${resetRequest.id}/review`, {
+      method: 'POST',
+      cookie: users.beta.cookie,
+      body: { decision: 'approve' },
+    });
+    assert.equal(forbiddenReview.response.status, 403);
+
+    const approved = await request(base, `/api/admin/password-resets/${resetRequest.id}/review`, {
+      method: 'POST',
+      cookie: users.admin.cookie,
+      body: { decision: 'approve' },
+    });
+    assert.equal(approved.response.status, 200);
+    assert.equal(approved.data.status, 'approved');
+
+    const approvedStatus = await request(base, `/api/auth/password-reset/status?token=${encodeURIComponent(resetToken)}`);
+    assert.equal(approvedStatus.data.request.status, 'approved');
+
+    const completed = await request(base, '/api/auth/password-reset/complete', {
+      method: 'POST',
+      body: { token: resetToken, password: 'newpass456' },
+    });
+    assert.equal(completed.response.status, 200);
+    assert.equal(completed.data.username, 'test_beta');
+
+    const completedStatus = await request(base, `/api/auth/password-reset/status?token=${encodeURIComponent(resetToken)}`);
+    assert.equal(completedStatus.data.request.status, 'completed');
+
+    const reused = await request(base, '/api/auth/password-reset/complete', {
+      method: 'POST',
+      body: { token: resetToken, password: 'anotherpass789' },
+    });
+    assert.equal(reused.response.status, 409);
+
+    const oldSession = await request(base, '/api/auth/me', { cookie: users.beta.cookie });
+    assert.equal(oldSession.data.user, null);
+
+    const oldPassword = await request(base, '/api/auth/login', {
+      method: 'POST',
+      body: { username: 'test_beta', password: 'testpass123' },
+    });
+    assert.equal(oldPassword.response.status, 401);
+
+    const newPassword = await request(base, '/api/auth/login', {
+      method: 'POST',
+      body: { username: 'test_beta', password: 'newpass456' },
+    });
+    assert.equal(newPassword.response.status, 200);
+    users.beta.cookie = cookiePair(newPassword.response);
+  });
+
   await t.test('logs out and invalidates the session', async () => {
     const logout = await request(base, '/api/auth/logout', {
       method: 'POST',

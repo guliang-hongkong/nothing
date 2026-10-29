@@ -7,6 +7,7 @@
   const toastRoot = document.getElementById('toast-root');
   const THEME_KEY = 'islands.theme';
   const DRAFT_KEY_PREFIX = 'islands.draft.v1';
+  const PASSWORD_RESET_KEY = 'islands.password-reset';
   const SORTS = ['latest', 'hot', 'unanswered'];
   const CATEGORY_ICONS = {
     bell: 'bell',
@@ -34,6 +35,7 @@
     pickerToken: 0,
     pendingAction: null,
     musicFileDuration: 0,
+    passwordResetTimer: null,
   };
 
   const compactFormatter = new Intl.NumberFormat('zh-CN', {
@@ -323,6 +325,7 @@
       const tab = ['mine', 'review'].includes(params.get('tab')) ? params.get('tab') : 'all';
       return { name: 'music', tab };
     }
+    if (path === '/admin/password-resets') return { name: 'password-resets' };
     if ((match = path.match(/^\/u\/([^/]+)$/))) {
       return { name: 'profile', userId: safeDecode(match[1]) };
     }
@@ -372,6 +375,8 @@
         await renderMessages(route, token);
       } else if (route.name === 'music') {
         await renderMusic(route, token);
+      } else if (route.name === 'password-resets') {
+        await renderPasswordResets(route, token);
       } else if (route.name === 'profile') {
         await renderProfile(route, token);
       } else if (route.name === 'search') {
@@ -462,6 +467,7 @@
           <a href="/u/${encodeURIComponent(state.me.id)}" data-link role="menuitem">${icon('user')}我的主页</a>
           <a href="/messages" data-link role="menuitem">${icon('message')}私信${unread ? `<span class="menu-count">${unread > 99 ? '99+' : unread}</span>` : ''}</a>
           <a href="/music" data-link role="menuitem">${icon('music')}音乐</a>
+          ${state.me.isAdmin ? `<a href="/admin/password-resets" data-link role="menuitem">${icon('lock')}密码重置</a>` : ''}
           <a href="/search" data-link role="menuitem">${icon('search')}发现话题</a>
           <div class="menu-separator"></div>
           <button type="button" class="danger" data-action="logout" role="menuitem">${icon('logout')}退出登录</button>
@@ -922,8 +928,11 @@
     const sender = message.mine ? state.me : other;
     const isReviewRequest = String(message.content).startsWith('[音乐审批申请]');
     const isReviewResult = String(message.content).startsWith('[音乐审批]');
+    const isPasswordResetRequest = String(message.content).startsWith('[密码重置申请]');
     let messageAction = '';
-    if (isReviewRequest && state.me?.isAdmin) {
+    if (isPasswordResetRequest && state.me?.isAdmin) {
+      messageAction = '<a class="msg-action" href="/admin/password-resets" data-link>打开重置申请 →</a>';
+    } else if (isReviewRequest && state.me?.isAdmin) {
       messageAction = '<a class="msg-action" href="/music?tab=review" data-link>打开待审批 →</a>';
     } else if (isReviewResult && !state.me?.isAdmin) {
       messageAction = '<a class="msg-action" href="/music?tab=mine" data-link>查看我的投稿 →</a>';
@@ -2033,6 +2042,10 @@
           <button class="btn btn-primary btn-lg btn-block" type="submit">${isRegister ? '创建账号' : '登录'}</button>
         </div>
       </form>
+      <div class="forgot-row">
+        <button class="text-button" type="button" data-action="forgot-password">忘记密码？</button>
+        <span>提交申请，管理员确认后设置新密码</span>
+      </div>
       <div class="demo-box">
         想先看看？访客 <code>linwan</code> / <code>demo1234</code>
         <button class="text-button" type="button" data-action="demo-login">一键体验 →</button>
@@ -2049,6 +2062,466 @@
       const field = form?.dataset.mode === 'register' ? form.querySelector('[name="displayName"]') : form?.querySelector('[name="username"]');
       field?.focus({ preventScroll: true });
     }, 120);
+  }
+
+  /* ------------------------------------------------------------------------
+     Password recovery
+     ------------------------------------------------------------------------ */
+
+  function readPasswordResetRequest() {
+    try {
+      const value = JSON.parse(localStorage.getItem(PASSWORD_RESET_KEY) || 'null');
+      return value && typeof value.token === 'string' ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function savePasswordResetRequest(token, username) {
+    try {
+      localStorage.setItem(PASSWORD_RESET_KEY, JSON.stringify({ token, username }));
+    } catch {
+      // Ignore storage failures.
+    }
+  }
+
+  function clearPasswordResetRequest() {
+    try {
+      localStorage.removeItem(PASSWORD_RESET_KEY);
+    } catch {
+      // Ignore storage failures.
+    }
+  }
+
+  function stopPasswordResetPolling() {
+    if (state.passwordResetTimer) {
+      clearTimeout(state.passwordResetTimer);
+      state.passwordResetTimer = null;
+    }
+  }
+
+  function schedulePasswordResetPoll(token) {
+    stopPasswordResetPolling();
+    state.passwordResetTimer = setTimeout(async () => {
+      state.passwordResetTimer = null;
+      if (!document.getElementById('forgot-root')) return;
+      try {
+        const data = await api(`/api/auth/password-reset/status?token=${encodeURIComponent(token)}`);
+        renderPasswordResetStatus(data.request, token);
+      } catch (error) {
+        if (error.status === 404) {
+          clearPasswordResetRequest();
+          renderForgotRequestForm('', '申请不存在或已失效，请重新提交');
+        }
+      }
+    }, 3000);
+  }
+
+  async function openForgotPassword() {
+    stopPasswordResetPolling();
+    openModal(
+      `
+      <button class="modal-close" type="button" data-action="close-modal" aria-label="关闭">${icon('close')}</button>
+      <div class="modal-eyebrow">ACCOUNT RECOVERY</div>
+      <h2 id="forgot-title">找回密码</h2>
+      <p class="modal-subtitle" id="forgot-subtitle">输入账号，管理员确认后即可设置新密码。</p>
+      <div id="forgot-root">
+        <div class="forgot-loading">正在读取申请状态…</div>
+      </div>
+      `,
+      { label: 'forgot-title' },
+    );
+    const saved = readPasswordResetRequest();
+    if (!saved) {
+      renderForgotRequestForm();
+      return;
+    }
+    try {
+      const data = await api(`/api/auth/password-reset/status?token=${encodeURIComponent(saved.token)}`);
+      if (!document.getElementById('forgot-root')) return;
+      renderPasswordResetStatus(data.request, saved.token);
+    } catch {
+      clearPasswordResetRequest();
+      if (document.getElementById('forgot-root')) renderForgotRequestForm(saved.username || '');
+    }
+  }
+
+  function renderForgotRequestForm(username = '', errorMessage = '') {
+    const root = document.getElementById('forgot-root');
+    if (!root) return;
+    stopPasswordResetPolling();
+    root.innerHTML = `
+      <form id="forgot-request-form" class="form-grid" novalidate>
+        <div class="field">
+          <label class="field-label" for="forgot-username">用户名</label>
+          <input class="input" id="forgot-username" name="username" type="text" maxlength="20" autocomplete="username" value="${escapeHtml(username)}" placeholder="输入你的用户名">
+        </div>
+        <p class="form-error" id="forgot-error"${errorMessage ? '' : ' hidden'}>${escapeHtml(errorMessage)}</p>
+        <div class="form-actions">
+          <button class="btn btn-ghost" type="button" data-action="back-to-login">返回登录</button>
+          <button class="btn btn-primary" type="submit">提交重置申请</button>
+        </div>
+      </form>
+      <div class="forgot-note">${icon('lock')}管理员会收到一条重置申请私信。确认前请先通过其他方式核对身份。</div>
+    `;
+    setTimeout(() => document.getElementById('forgot-username')?.focus({ preventScroll: true }), 100);
+  }
+
+  function renderPasswordResetStatus(request, token) {
+    const root = document.getElementById('forgot-root');
+    if (!root) return;
+    const status = request.status;
+    const subtitles = {
+      pending: '申请已提交，正在等待管理员确认。',
+      approved: '管理员已确认，请设置一个新密码。',
+      rejected: '管理员未通过这次申请。',
+      completed: '密码已经更新。',
+      expired: '这次申请已经失效。',
+    };
+    const subtitle = document.getElementById('forgot-subtitle');
+    if (subtitle && subtitles[status]) subtitle.textContent = subtitles[status];
+    if (status === 'pending') {
+      root.innerHTML = `
+        <div class="forgot-status">
+          <span class="forgot-status-icon">${icon('lock')}</span>
+          <h3>等待管理员确认</h3>
+          <p>账号 <strong>@${escapeHtml(request.username)}</strong> 的重置申请已发送给管理员。</p>
+          <p class="forgot-hint">保持这个页面打开，管理员确认后会自动出现设置新密码的输入框。</p>
+          <div class="forgot-progress"><span class="is-done">1</span><i></i><span>2</span><i></i><span>3</span></div>
+          <div class="forgot-actions">
+            <button class="btn btn-ghost" type="button" data-action="forgot-refresh" data-token="${escapeHtml(token)}">${icon('refresh')}刷新状态</button>
+            <button class="btn btn-ghost" type="button" data-action="back-to-login">返回登录</button>
+          </div>
+        </div>
+      `;
+      schedulePasswordResetPoll(token);
+      return;
+    }
+
+    stopPasswordResetPolling();
+    if (status === 'approved') {
+      root.innerHTML = `
+        <div class="forgot-status">
+          <span class="forgot-status-icon is-approved">${icon('check')}</span>
+          <h3>管理员已确认</h3>
+          <p>请为 <strong>@${escapeHtml(request.username)}</strong> 设置一个新密码。</p>
+        </div>
+        <form id="forgot-complete-form" class="form-grid" data-token="${escapeHtml(token)}" novalidate>
+          <div class="field">
+            <label class="field-label" for="reset-password">新密码 <small>至少 8 个字符</small></label>
+            <input class="input" id="reset-password" name="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="输入新密码">
+          </div>
+          <div class="field">
+            <label class="field-label" for="reset-password-confirm">确认新密码</label>
+            <input class="input" id="reset-password-confirm" name="confirm" type="password" maxlength="128" autocomplete="new-password" placeholder="再输入一次">
+          </div>
+          <p class="form-error" id="reset-password-error" hidden></p>
+          <div class="form-actions">
+            <button class="btn btn-ghost" type="button" data-action="back-to-login">取消</button>
+            <button class="btn btn-primary" type="submit">设置新密码</button>
+          </div>
+        </form>
+        <div class="forgot-note">${icon('lock')}设置成功后，这个账号在所有设备上的登录状态都会失效。</div>
+      `;
+      setPasswordResetFormFocus();
+      return;
+    }
+
+    if (status === 'rejected') {
+      root.innerHTML = `
+        <div class="forgot-status">
+          <span class="forgot-status-icon">${icon('close')}</span>
+          <h3>申请未通过</h3>
+          <p>${escapeHtml(request.reviewNote || '管理员未通过本次重置申请。')}</p>
+          <div class="forgot-actions">
+            <button class="btn btn-primary" type="button" data-action="forgot-restart">重新申请</button>
+            <button class="btn btn-ghost" type="button" data-action="back-to-login">返回登录</button>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    if (status === 'completed') {
+      clearPasswordResetRequest();
+      root.innerHTML = `
+        <div class="forgot-status">
+          <span class="forgot-status-icon is-approved">${icon('check')}</span>
+          <h3>密码已更新</h3>
+          <p>请使用新密码重新登录离岛。</p>
+          <button class="btn btn-primary" type="button" data-action="back-to-login">返回登录</button>
+        </div>
+      `;
+      return;
+    }
+
+    clearPasswordResetRequest();
+    root.innerHTML = `
+      <div class="forgot-status">
+        <span class="forgot-status-icon">${icon('refresh')}</span>
+        <h3>申请已失效</h3>
+        <p>这次重置申请已经过期或无法使用，请重新提交。</p>
+        <button class="btn btn-primary" type="button" data-action="forgot-restart">重新申请</button>
+      </div>
+    `;
+  }
+
+  function setPasswordResetFormFocus() {
+    setTimeout(() => document.getElementById('reset-password')?.focus({ preventScroll: true }), 100);
+  }
+
+  async function submitForgotRequest(form) {
+    const submit = form.querySelector('[type="submit"]');
+    const username = String(new FormData(form).get('username') || '').trim();
+    clearFormError(form);
+    if (!username) {
+      showFormError(form, '请输入用户名');
+      return;
+    }
+    setBusy(submit, true, '正在提交…');
+    try {
+      const data = await api('/api/auth/password-reset/request', {
+        method: 'POST',
+        body: { username },
+      });
+      savePasswordResetRequest(data.token, data.username);
+      renderPasswordResetStatus(
+        { status: 'pending', username: data.username, reviewNote: '' },
+        data.token,
+      );
+    } catch (error) {
+      showFormError(form, error.message || '申请提交失败，请稍后再试');
+    } finally {
+      setBusy(submit, false);
+    }
+  }
+
+  async function refreshPasswordReset(token) {
+    const root = document.getElementById('forgot-root');
+    if (!root) return;
+    try {
+      const data = await api(`/api/auth/password-reset/status?token=${encodeURIComponent(token)}`);
+      renderPasswordResetStatus(data.request, token);
+    } catch (error) {
+      if (error.status === 404) {
+        clearPasswordResetRequest();
+        renderForgotRequestForm('', '申请不存在或已失效，请重新提交');
+      } else {
+        toast(error.message || '暂时无法读取申请状态', { type: 'error' });
+      }
+    }
+  }
+
+  async function submitPasswordResetComplete(form) {
+    const submit = form.querySelector('[type="submit"]');
+    const password = String(new FormData(form).get('password') || '');
+    const confirm = String(new FormData(form).get('confirm') || '');
+    clearFormError(form);
+    if (password.length < 8) {
+      showFormError(form, '新密码至少需要 8 个字符');
+      return;
+    }
+    if (password !== confirm) {
+      showFormError(form, '两次输入的密码不一致');
+      return;
+    }
+    setBusy(submit, true, '正在更新…');
+    try {
+      const data = await api('/api/auth/password-reset/complete', {
+        method: 'POST',
+        body: { token: form.dataset.token, password },
+      });
+      clearPasswordResetRequest();
+      const root = document.getElementById('forgot-root');
+      if (root) {
+        root.innerHTML = `
+          <div class="forgot-status">
+            <span class="forgot-status-icon is-approved">${icon('check')}</span>
+            <h3>密码已更新</h3>
+            <p>账号 <strong>@${escapeHtml(data.username)}</strong> 的密码已经更新，所有旧登录状态已失效。</p>
+            <button class="btn btn-primary" type="button" data-action="back-to-login">使用新密码登录</button>
+          </div>
+        `;
+      }
+      toast('密码已更新');
+    } catch (error) {
+      showFormError(form, error.message || '密码更新失败，请稍后再试');
+    } finally {
+      setBusy(submit, false);
+    }
+  }
+
+  /* ------------------------------------------------------------------------
+     Admin password reset review
+     ------------------------------------------------------------------------ */
+
+  function resetStatusLabel(status) {
+    return {
+      pending: '等待确认',
+      approved: '已通过',
+      rejected: '已拒绝',
+      completed: '已完成',
+      expired: '已过期',
+    }[status] || status;
+  }
+
+  async function renderPasswordResets(route, token) {
+    if (!state.me) {
+      main.innerHTML = `
+        <div class="state-card">
+          <span class="state-icon">${icon('lock')}</span>
+          <h3>请先登录管理员账号</h3>
+          <p>密码重置申请只有管理员可以查看和确认。</p>
+          <button class="btn btn-primary" type="button" data-action="open-auth" data-mode="login">登录</button>
+        </div>
+      `;
+      document.title = "密码重置 · Island's forum";
+      return;
+    }
+    if (!state.me.isAdmin) {
+      main.innerHTML = `
+        <div class="state-card">
+          <span class="state-icon">${icon('lock')}</span>
+          <h3>没有访问权限</h3>
+          <p>这个页面只对管理员开放。</p>
+          <a class="btn btn-soft" href="/" data-link>回到广场</a>
+        </div>
+      `;
+      document.title = "密码重置 · Island's forum";
+      return;
+    }
+
+    const data = await api('/api/admin/password-resets');
+    if (isStale(token)) return;
+    const pending = data.pending || [];
+    const recent = data.recent || [];
+    const requestCards = pending.length
+      ? pending
+          .map(
+            (request) => `
+        <article class="reset-request">
+          <div class="reset-request-main">
+            ${avatar({ displayName: request.display_name, username: request.username }, 'md')}
+            <div class="reset-request-info">
+              <h3>${escapeHtml(request.display_name)} <span>@${escapeHtml(request.username)}</span></h3>
+              <p>申请于 ${timeAgo(request.requested_at)} · 账号创建于 ${longDate(request.user_created_at)}</p>
+            </div>
+          </div>
+          <div class="reset-request-actions">
+            <button class="btn btn-primary btn-sm" type="button" data-action="approve-password-reset" data-request-id="${escapeHtml(request.id)}" data-username="${escapeHtml(request.username)}">确认通过</button>
+            <button class="btn btn-ghost btn-sm" type="button" data-action="reject-password-reset" data-request-id="${escapeHtml(request.id)}" data-username="${escapeHtml(request.username)}">拒绝</button>
+          </div>
+        </article>`,
+          )
+          .join('')
+      : `<div class="state-card admin-reset-empty">
+          <span class="state-icon">${icon('check')}</span>
+          <h3>没有待确认的申请</h3>
+          <p>用户提交忘记密码申请后，会通过私信和这里通知你。</p>
+        </div>`;
+
+    const recentRows = recent.length
+      ? recent
+          .map(
+            (request) => `
+        <div class="reset-history-row">
+          <span class="reset-history-user">${escapeHtml(request.display_name)} <small>@${escapeHtml(request.username)}</small></span>
+          <span class="reset-history-status is-${escapeHtml(request.status)}">${resetStatusLabel(request.status)}</span>
+          <span class="reset-history-time">${timeAgo(request.reviewed_at || request.used_at || request.requested_at)}</span>
+        </div>`,
+          )
+          .join('')
+      : '<p class="faint reset-history-empty">暂无处理记录</p>';
+
+    main.innerHTML = `
+      <div class="admin-page">
+        <a class="back-link" href="/" data-link>${icon('arrow-left')}返回广场</a>
+        <div class="page-head">
+          <div class="page-head-main">
+            <span class="page-icon">${icon('lock')}</span>
+            <div>
+              <h1>密码重置申请</h1>
+              <p>确认前请先通过私信或其他方式核对申请人身份。</p>
+            </div>
+          </div>
+          <span class="chip">${pending.length} 个待处理</span>
+        </div>
+        <div class="admin-warning">${icon('lock')}这是一项敏感操作：通过后，申请人所在浏览器将获得一次设置新密码的权限。</div>
+        <section class="admin-section">
+          <div class="section-heading"><h2>待确认 <span>${pending.length} 条</span></h2></div>
+          <div class="reset-request-list">${requestCards}</div>
+        </section>
+        <section class="admin-section">
+          <div class="section-heading"><h2>最近处理</h2></div>
+          <div class="reset-history">${recentRows}</div>
+        </section>
+      </div>
+    `;
+    document.title = "密码重置 · Island's forum";
+  }
+
+  async function approvePasswordReset(button) {
+    if (!state.me?.isAdmin) return;
+    setBusy(button, true, '正在确认…');
+    try {
+      await api(`/api/admin/password-resets/${encodeURIComponent(button.dataset.requestId)}/review`, {
+        method: 'POST',
+        body: { decision: 'approve' },
+      });
+      toast(`已确认 @${button.dataset.username} 的重置申请`);
+      await renderRoute({ keepScroll: true });
+    } catch (error) {
+      toast(error.message || '操作失败，请稍后再试', { type: 'error' });
+    } finally {
+      if (button.isConnected) setBusy(button, false);
+    }
+  }
+
+  function openRejectPasswordResetModal(button) {
+    if (!state.me?.isAdmin) return;
+    openModal(
+      `
+      <button class="modal-close" type="button" data-action="close-modal" aria-label="关闭">${icon('close')}</button>
+      <div class="modal-eyebrow">ACCOUNT RECOVERY</div>
+      <h2 id="reject-reset-title">拒绝这次申请？</h2>
+      <p class="modal-subtitle">@${escapeHtml(button.dataset.username)} 的密码重置申请将不会被通过。可以留一句说明。</p>
+      <div class="field" style="margin-top: 18px">
+        <label class="field-label" for="reject-reset-note">说明 <small>可选</small></label>
+        <textarea class="textarea" id="reject-reset-note" maxlength="200" placeholder="例如：身份核对未通过"></textarea>
+      </div>
+      <p class="form-error" id="reject-reset-error" hidden></p>
+      <div class="form-actions">
+        <button class="btn btn-ghost" type="button" data-action="close-modal">取消</button>
+        <button class="btn btn-primary" type="button" data-action="confirm-reject-password-reset" data-request-id="${escapeHtml(button.dataset.requestId)}">确认拒绝</button>
+      </div>
+      `,
+      { label: 'reject-reset-title' },
+    );
+  }
+
+  async function confirmRejectPasswordReset(button) {
+    if (!state.me?.isAdmin) return;
+    const note = String(document.getElementById('reject-reset-note')?.value || '').trim();
+    const errorBox = document.getElementById('reject-reset-error');
+    setBusy(button, true, '正在处理…');
+    try {
+      await api(`/api/admin/password-resets/${encodeURIComponent(button.dataset.requestId)}/review`, {
+        method: 'POST',
+        body: { decision: 'reject', note },
+      });
+      closeModal();
+      toast('已拒绝这次密码重置申请');
+      await renderRoute({ keepScroll: true });
+    } catch (error) {
+      if (errorBox) {
+        errorBox.textContent = error.message || '操作失败，请稍后再试';
+        errorBox.hidden = false;
+      } else {
+        toast(error.message || '操作失败，请稍后再试', { type: 'error' });
+      }
+    } finally {
+      if (button.isConnected) setBusy(button, false);
+    }
   }
 
   function switchAuthMode(mode) {
@@ -2645,6 +3118,7 @@
      ------------------------------------------------------------------------ */
 
   function openModal(html, { wide = false, label = '' } = {}) {
+    stopPasswordResetPolling();
     if (state.modalCloseTimer) {
       clearTimeout(state.modalCloseTimer);
       state.modalCloseTimer = null;
@@ -2695,6 +3169,7 @@
   function closeModal() {
     const backdrop = modalRoot.querySelector('.modal-backdrop');
     if (!backdrop) return;
+    stopPasswordResetPolling();
     backdrop.classList.remove('is-open');
     document.body.classList.remove('modal-open');
     if (state.modalKeyHandler) {
@@ -2935,6 +3410,14 @@
         event.preventDefault();
         submitMusicUpload(form);
       }
+      if (form.id === 'forgot-request-form') {
+        event.preventDefault();
+        submitForgotRequest(form);
+      }
+      if (form.id === 'forgot-complete-form') {
+        event.preventDefault();
+        submitPasswordResetComplete(form);
+      }
     });
 
     document.addEventListener('change', (event) => {
@@ -3058,6 +3541,28 @@
         break;
       case 'copy-link':
         await copyCurrentLink();
+        break;
+      case 'forgot-password':
+        openForgotPassword();
+        break;
+      case 'back-to-login':
+        openAuth('login');
+        break;
+      case 'forgot-refresh':
+        await refreshPasswordReset(element.dataset.token);
+        break;
+      case 'forgot-restart':
+        clearPasswordResetRequest();
+        renderForgotRequestForm();
+        break;
+      case 'approve-password-reset':
+        await approvePasswordReset(element);
+        break;
+      case 'reject-password-reset':
+        openRejectPasswordResetModal(element);
+        break;
+      case 'confirm-reject-password-reset':
+        await confirmRejectPasswordReset(element);
         break;
       case 'music-upload':
         openMusicUpload();
