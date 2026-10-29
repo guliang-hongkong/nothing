@@ -17,6 +17,21 @@ const {
 const SESSION_COOKIE = 'islands_session';
 const SESSION_DAYS = 30;
 const MAX_BODY_BYTES = 64 * 1024;
+const MAX_MUSIC_BYTES = 25 * 1024 * 1024;
+const MUSIC_TYPES = {
+  'audio/mpeg': '.mp3',
+  'audio/mp3': '.mp3',
+  'audio/mp4': '.m4a',
+  'audio/x-m4a': '.m4a',
+  'audio/aac': '.aac',
+  'audio/wav': '.wav',
+  'audio/x-wav': '.wav',
+  'audio/ogg': '.ogg',
+  'audio/opus': '.opus',
+  'audio/webm': '.weba',
+  'audio/flac': '.flac',
+  'audio/x-flac': '.flac',
+};
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
@@ -45,7 +60,7 @@ function setSecurityHeaders(res) {
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   res.setHeader(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'",
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'",
   );
 }
 
@@ -118,6 +133,50 @@ function readJsonBody(req) {
   });
 }
 
+function readRawBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const declaredLength = Number(req.headers['content-length'] || 0);
+    if (declaredLength > maxBytes) {
+      reject(new HttpError(413, '音频文件不能超过 25MB'));
+      return;
+    }
+    const chunks = [];
+    let total = 0;
+    let tooLarge = false;
+    req.on('data', (chunk) => {
+      total += chunk.length;
+      if (total > maxBytes) {
+        tooLarge = true;
+        chunks.length = 0;
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (tooLarge) {
+        reject(new HttpError(413, '音频文件不能超过 25MB'));
+        return;
+      }
+      resolve(Buffer.concat(chunks));
+    });
+    req.on('error', reject);
+  });
+}
+
+function assertSameOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin) return;
+  let originHost;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    throw new HttpError(403, '请求来源无效');
+  }
+  if (originHost !== req.headers.host) {
+    throw new HttpError(403, '请求来源无效');
+  }
+}
+
 function assertJsonMutation(req) {
   const contentType = String(req.headers['content-type'] || '')
     .split(';')[0]
@@ -126,18 +185,7 @@ function assertJsonMutation(req) {
   if (contentType !== 'application/json') {
     throw new HttpError(415, '请使用 JSON 格式提交');
   }
-  const origin = req.headers.origin;
-  if (origin) {
-    let originHost;
-    try {
-      originHost = new URL(origin).host;
-    } catch {
-      throw new HttpError(403, '请求来源无效');
-    }
-    if (originHost !== req.headers.host) {
-      throw new HttpError(403, '请求来源无效');
-    }
-  }
+  assertSameOrigin(req);
 }
 
 function cleanText(value, { label, min = 1, max, singleLine = false }) {
@@ -248,7 +296,13 @@ const TOPIC_SELECT = `
 function createForumServer(options = {}) {
   const dbPath = options.dbPath || path.join(__dirname, '..', 'data', 'forum.db');
   const publicDir = path.resolve(options.publicDir || path.join(__dirname, '..', 'public'));
+  const dataDir =
+    dbPath === ':memory:'
+      ? path.join(__dirname, '..', 'data')
+      : path.dirname(path.resolve(dbPath));
+  const musicDir = path.resolve(options.musicDir || path.join(dataDir, 'music'));
   const db = openDatabase(dbPath, { seed: options.seed !== false });
+  fs.mkdirSync(musicDir, { recursive: true });
   const sseClients = new Map();
   const rateBuckets = new Map();
   let lastSessionCleanup = 0;
@@ -334,6 +388,118 @@ function createForumServer(options = {}) {
 
   function summaryFor(userId) {
     return { unreadMessages: getUnreadMessages(userId) };
+  }
+
+  function getPrimaryAdmin() {
+    return db
+      .prepare('SELECT id, username, display_name FROM users WHERE is_admin = 1 ORDER BY created_at ASC LIMIT 1')
+      .get();
+  }
+
+  function ensureConversation(userOne, userTwo) {
+    const [userA, userB] = [userOne, userTwo].sort();
+    let conversation = db
+      .prepare('SELECT * FROM conversations WHERE user_a_id = ? AND user_b_id = ?')
+      .get(userA, userB);
+    if (conversation) return conversation;
+    const now = new Date().toISOString();
+    try {
+      db.prepare('INSERT INTO conversations (id, user_a_id, user_b_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(
+        newId(),
+        userA,
+        userB,
+        now,
+        now,
+      );
+    } catch (error) {
+      if (!String(error.message).includes('UNIQUE')) throw error;
+    }
+    conversation = db
+      .prepare('SELECT * FROM conversations WHERE user_a_id = ? AND user_b_id = ?')
+      .get(userA, userB);
+    return conversation;
+  }
+
+  function createDirectMessage(senderId, recipientId, content) {
+    const conversation = ensureConversation(senderId, recipientId);
+    const now = new Date().toISOString();
+    const id = newId();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('INSERT INTO messages (id, conversation_id, sender_id, content, created_at, read_at) VALUES (?, ?, ?, ?, ?, NULL)').run(
+        id,
+        conversation.id,
+        senderId,
+        content,
+        now,
+      );
+      db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(now, conversation.id);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    const sender = db.prepare('SELECT display_name FROM users WHERE id = ?').get(senderId);
+    const message = {
+      id,
+      content,
+      createdAt: now,
+      senderId,
+      mine: true,
+      senderDisplayName: sender?.display_name || '离岛',
+    };
+    for (const userId of [senderId, recipientId]) {
+      broadcastToUser(userId, 'message:new', {
+        type: 'message:new',
+        conversationId: conversation.id,
+        message,
+        unreadMessages: getUnreadMessages(userId),
+      });
+    }
+    return message;
+  }
+
+  function musicFromRow(row, viewer = null) {
+    const [avatarFrom, avatarTo] = avatarColor(row.submitter_username || row.user_id);
+    const isMine = Boolean(viewer && viewer.id === row.user_id);
+    return {
+      id: row.id,
+      title: row.title,
+      artist: row.artist,
+      genre: row.genre,
+      description: row.description,
+      duration: row.duration,
+      status: row.status,
+      reviewNote: row.review_note,
+      fileSize: row.file_size,
+      mimeType: row.mime_type,
+      createdAt: row.created_at,
+      reviewedAt: row.reviewed_at,
+      audioUrl: `/api/music/${encodeURIComponent(row.id)}/audio`,
+      isMine,
+      canListen: row.status === 'approved' || Boolean(viewer && (viewer.isAdmin || isMine)),
+      submitter: {
+        id: row.user_id,
+        username: row.submitter_username,
+        displayName: row.submitter_display_name,
+        avatarFrom,
+        avatarTo,
+        isAdmin: Boolean(row.submitter_is_admin),
+      },
+    };
+  }
+
+  function getMusicCounts(auth) {
+    const approved = db.prepare("SELECT COUNT(*) AS count FROM music WHERE status = 'approved'").get().count;
+    let mine = 0;
+    let pending = 0;
+    if (auth) {
+      mine = db.prepare('SELECT COUNT(*) AS count FROM music WHERE user_id = ?').get(auth.user.id).count;
+      if (auth.user.isAdmin) {
+        pending = db.prepare("SELECT COUNT(*) AS count FROM music WHERE status = 'pending'").get().count;
+      }
+    }
+    return { approved, mine, pending };
   }
 
   function getClientIp(req) {
@@ -614,6 +780,288 @@ function createForumServer(options = {}) {
 
     if (pathname === '/api/stats' && method === 'GET') {
       sendJson(res, 200, { stats: getStats() });
+      return;
+    }
+
+    if (pathname === '/api/music/upload' && method === 'POST') {
+      const auth = requireAuth(req);
+      enforceRate(`music-upload:${auth.user.id}`, 6, 60 * 60 * 1000, res);
+      const title = cleanText(url.searchParams.get('title'), { label: '歌曲名', min: 1, max: 80, singleLine: true });
+      const artist = cleanText(url.searchParams.get('artist'), { label: '歌手', min: 1, max: 60, singleLine: true });
+      const genre = optionalText(url.searchParams.get('genre'), { label: '分类', max: 20, singleLine: true });
+      const description = optionalText(url.searchParams.get('description'), { label: '介绍', max: 500 });
+      const durationValue = Number(url.searchParams.get('duration'));
+      const duration =
+        Number.isFinite(durationValue) && durationValue > 0 && durationValue < 3600
+          ? Math.round(durationValue * 10) / 10
+          : 0;
+
+      const mimeType = String(req.headers['content-type'] || '')
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+      const extension = MUSIC_TYPES[mimeType];
+      if (!extension) throw new HttpError(415, '暂不支持这种音频格式，请上传 MP3、M4A、WAV、OGG 或 FLAC');
+
+      const declaredLength = Number(req.headers['content-length'] || 0);
+      if (declaredLength > MAX_MUSIC_BYTES) throw new HttpError(413, '音频文件不能超过 25MB');
+      const audio = await readRawBody(req, MAX_MUSIC_BYTES);
+      if (audio.length < 1024) throw new HttpError(400, '音频文件似乎为空');
+
+      const id = newId();
+      const fileName = `${id}${extension}`;
+      const filePath = path.join(musicDir, fileName);
+      const now = new Date().toISOString();
+      const approved = Boolean(auth.user.isAdmin);
+      await fs.promises.writeFile(filePath, audio, { flag: 'wx' });
+      try {
+        db.prepare(`
+          INSERT INTO music (
+            id, user_id, title, artist, genre, description, duration, file_name, mime_type,
+            file_size, status, review_note, reviewed_by, created_at, reviewed_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)
+        `).run(
+          id,
+          auth.user.id,
+          title,
+          artist,
+          genre,
+          description,
+          duration,
+          fileName,
+          mimeType,
+          audio.length,
+          approved ? 'approved' : 'pending',
+          approved ? auth.user.id : null,
+          now,
+          approved ? now : null,
+        );
+      } catch (error) {
+        fs.promises.unlink(filePath).catch(() => {});
+        throw error;
+      }
+
+      if (!approved) {
+        const admin = getPrimaryAdmin();
+        if (admin && admin.id !== auth.user.id) {
+          try {
+            createDirectMessage(
+              auth.user.id,
+              admin.id,
+              `[音乐审批申请]\n曲目：${title}\n歌手：${artist}\n提交人：${auth.user.displayName} (@${auth.user.username})\n\n请前往「音乐」页面的「待审批」试听并处理。`,
+            );
+          } catch (error) {
+            console.error('Failed to send music review notification:', error);
+          }
+        }
+      }
+
+      const row = db
+        .prepare(`
+          SELECT m.*, u.username AS submitter_username, u.display_name AS submitter_display_name,
+                 u.is_admin AS submitter_is_admin
+          FROM music m JOIN users u ON u.id = m.user_id
+          WHERE m.id = ?
+        `)
+        .get(id);
+      sendJson(res, 201, {
+        music: musicFromRow(row, auth.user),
+        pending: !approved,
+        counts: getMusicCounts(auth),
+      });
+      return;
+    }
+
+    if (pathname === '/api/music' && method === 'GET') {
+      const auth = getAuth(req);
+      const requestedScope = url.searchParams.get('scope') || 'approved';
+      const scope = requestedScope === 'review' ? 'pending' : requestedScope;
+      if (!['approved', 'mine', 'pending'].includes(scope)) {
+        throw new HttpError(400, '未知的音乐列表');
+      }
+      if (scope === 'mine' && !auth) throw new HttpError(401, '请先登录');
+      if (scope === 'pending' && !auth?.user.isAdmin) throw new HttpError(403, '只有管理员可以查看待审批音乐');
+
+      const page = Math.max(1, Number.parseInt(url.searchParams.get('page') || '1', 10) || 1);
+      const pageSize = Math.min(24, Math.max(1, Number.parseInt(url.searchParams.get('pageSize') || '12', 10) || 12));
+      let where = "m.status = 'approved'";
+      const params = [];
+      if (scope === 'mine') {
+        where = 'm.user_id = ?';
+        params.push(auth.user.id);
+      } else if (scope === 'pending') {
+        where = "m.status = 'pending'";
+      }
+
+      const total = db.prepare(`SELECT COUNT(*) AS count FROM music m WHERE ${where}`).get(...params).count;
+      const order = scope === 'pending' ? 'ASC' : 'DESC';
+      const rows = db
+        .prepare(`
+          SELECT m.*, u.username AS submitter_username, u.display_name AS submitter_display_name,
+                 u.is_admin AS submitter_is_admin
+          FROM music m JOIN users u ON u.id = m.user_id
+          WHERE ${where}
+          ORDER BY m.created_at ${order}
+          LIMIT ? OFFSET ?
+        `)
+        .all(...params, pageSize, (page - 1) * pageSize);
+      sendJson(res, 200, {
+        music: rows.map((row) => musicFromRow(row, auth?.user)),
+        pagination: {
+          page,
+          pageSize,
+          total,
+          pages: Math.max(1, Math.ceil(total / pageSize)),
+        },
+        counts: getMusicCounts(auth),
+        scope,
+      });
+      return;
+    }
+
+    const musicAudioMatch = api[0] === 'music' && api[1] && api[2] === 'audio' ? api[1] : null;
+    if (musicAudioMatch && ['GET', 'HEAD'].includes(method)) {
+      const auth = getAuth(req);
+      const row = db
+        .prepare('SELECT id, user_id, file_name, mime_type, status FROM music WHERE id = ?')
+        .get(musicAudioMatch);
+      if (!row) throw new HttpError(404, '音乐不存在');
+      const canListen =
+        row.status === 'approved' ||
+        Boolean(auth && (auth.user.isAdmin || auth.user.id === row.user_id));
+      if (!canListen) throw new HttpError(404, '音乐不存在');
+
+      const filePath = path.join(musicDir, path.basename(row.file_name));
+      let stat;
+      try {
+        stat = fs.statSync(filePath);
+      } catch {
+        throw new HttpError(404, '音频文件不存在');
+      }
+      if (!stat.isFile()) throw new HttpError(404, '音频文件不存在');
+
+      const total = stat.size;
+      let start = 0;
+      let end = total - 1;
+      let status = 200;
+      const range = req.headers.range;
+      if (range) {
+        const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+        if (!match || (!match[1] && !match[2])) {
+          res.writeHead(416, { 'Content-Range': `bytes */${total}`, 'Accept-Ranges': 'bytes' });
+          res.end();
+          return;
+        }
+        if (!match[1]) {
+          const suffix = Number(match[2]);
+          if (!Number.isFinite(suffix) || suffix <= 0) {
+            res.writeHead(416, { 'Content-Range': `bytes */${total}`, 'Accept-Ranges': 'bytes' });
+            res.end();
+            return;
+          }
+          start = Math.max(0, total - suffix);
+        } else {
+          start = Number(match[1]);
+          if (match[2]) end = Number(match[2]);
+        }
+        if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= total) {
+          res.writeHead(416, { 'Content-Range': `bytes */${total}`, 'Accept-Ranges': 'bytes' });
+          res.end();
+          return;
+        }
+        end = Math.min(end, total - 1);
+        status = 206;
+      }
+
+      const headers = {
+        'Content-Type': row.mime_type,
+        'Content-Length': end - start + 1,
+        'Accept-Ranges': 'bytes',
+        'Content-Disposition': 'inline',
+        'Cache-Control': row.status === 'approved' ? 'public, max-age=86400' : 'private, no-store',
+      };
+      if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${total}`;
+      res.writeHead(status, headers);
+      if (method === 'HEAD') {
+        res.end();
+        return;
+      }
+      const stream = fs.createReadStream(filePath, { start, end });
+      stream.on('error', () => {
+        if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end();
+      });
+      stream.pipe(res);
+      return;
+    }
+
+    const musicReviewMatch = api[0] === 'music' && api[1] && api[2] === 'review' ? api[1] : null;
+    if (musicReviewMatch && method === 'POST') {
+      const auth = requireAuth(req);
+      if (!auth.user.isAdmin) throw new HttpError(403, '只有管理员可以审批音乐');
+      const body = await readJsonBody(req);
+      const decision = body.decision === 'approve' ? 'approved' : body.decision === 'reject' ? 'rejected' : null;
+      if (!decision) throw new HttpError(400, '请选择通过或拒绝');
+      const note = optionalText(body.note, { label: '审核说明', max: 300 });
+      if (decision === 'rejected' && !note) throw new HttpError(400, '请填写拒绝原因，方便通知投稿人');
+
+      const row = db
+        .prepare(`
+          SELECT m.*, u.username AS submitter_username, u.display_name AS submitter_display_name,
+                 u.is_admin AS submitter_is_admin
+          FROM music m JOIN users u ON u.id = m.user_id
+          WHERE m.id = ?
+        `)
+        .get(musicReviewMatch);
+      if (!row) throw new HttpError(404, '音乐不存在');
+
+      const now = new Date().toISOString();
+      db.prepare('UPDATE music SET status = ?, review_note = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?').run(
+        decision,
+        note,
+        auth.user.id,
+        now,
+        musicReviewMatch,
+      );
+      row.status = decision;
+      row.review_note = note;
+      row.reviewed_at = now;
+
+      if (row.user_id !== auth.user.id) {
+        const notification =
+          decision === 'approved'
+            ? `[音乐审批] 你的音乐《${row.title}》已通过审核，现已在「音乐」页面公开。`
+            : `[音乐审批] 你的音乐《${row.title}》未通过审核。\n原因：${note}`;
+        try {
+          createDirectMessage(auth.user.id, row.user_id, notification);
+        } catch (error) {
+          console.error('Failed to send music review result:', error);
+        }
+      }
+
+      sendJson(res, 200, {
+        music: musicFromRow(row, auth.user),
+        counts: getMusicCounts(auth),
+      });
+      return;
+    }
+
+    const musicDeleteMatch = api[0] === 'music' && api[1] && api[2] === 'delete' ? api[1] : null;
+    if (musicDeleteMatch && method === 'POST') {
+      const auth = requireAuth(req);
+      if (!auth.user.isAdmin) throw new HttpError(403, '只有管理员可以删除音乐');
+      await readJsonBody(req);
+      const row = db.prepare('SELECT id, title, file_name FROM music WHERE id = ?').get(musicDeleteMatch);
+      if (!row) throw new HttpError(404, '音乐不存在');
+
+      db.prepare('DELETE FROM music WHERE id = ?').run(musicDeleteMatch);
+      try {
+        await fs.promises.unlink(path.join(musicDir, path.basename(row.file_name)));
+      } catch (error) {
+        if (error.code !== 'ENOENT') console.error('Failed to remove music file:', error);
+      }
+      console.log(`[admin] ${auth.user.username} deleted music ${musicDeleteMatch}`);
+      sendJson(res, 200, { ok: true, deletedMusicId: musicDeleteMatch });
       return;
     }
 
@@ -1165,7 +1613,10 @@ function createForumServer(options = {}) {
 
     const run = async () => {
       if (pathname.startsWith('/api/')) {
-        if (!['GET', 'HEAD'].includes(req.method)) assertJsonMutation(req);
+        if (!['GET', 'HEAD'].includes(req.method)) {
+          if (pathname === '/api/music/upload') assertSameOrigin(req);
+          else assertJsonMutation(req);
+        }
         await handleApi(req, res, pathname, url);
         return;
       }

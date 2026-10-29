@@ -31,6 +31,26 @@ async function request(base, route, { method = 'GET', body, cookie } = {}) {
   return { response, data };
 }
 
+async function uploadMusic(base, cookie, metadata, audio, contentType = 'audio/mpeg') {
+  const params = new URLSearchParams(metadata);
+  const response = await fetch(`${base}/api/music/upload?${params.toString()}`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      Cookie: cookie,
+      'Content-Type': contentType,
+    },
+    body: audio,
+  });
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
+  return { response, data };
+}
+
 test('forum API supports the full member journey', async (t) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'islands-forum-test-'));
   const dbPath = path.join(tempDir, 'test.db');
@@ -319,6 +339,136 @@ test('forum API supports the full member journey', async (t) => {
     assert.equal(forum.db.prepare('SELECT COUNT(*) AS count FROM replies WHERE topic_id = ?').get(topicId).count, 0);
     assert.equal(forum.db.prepare("SELECT COUNT(*) AS count FROM likes WHERE target_type = 'topic' AND target_id = ?").get(topicId).count, 0);
     assert.equal(forum.db.prepare("SELECT COUNT(*) AS count FROM likes WHERE target_type = 'reply' AND target_id = ?").get(replyId).count, 0);
+  });
+
+  await t.test('music submissions require approval and notify the administrator by private message', async () => {
+    const audio = Buffer.concat([
+      Buffer.from('ID3'),
+      Buffer.alloc(4096, 7),
+    ]);
+    const first = await uploadMusic(base, users.beta.cookie, {
+      title: '测试海浪',
+      artist: '测试歌手',
+      genre: '氛围',
+      description: '一条用于测试的音频。',
+      duration: '12.5',
+    }, audio);
+    assert.equal(first.response.status, 201);
+    assert.equal(first.data.music.status, 'pending');
+    assert.equal(first.data.pending, true);
+    assert.equal(first.data.music.title, '测试海浪');
+    const pendingId = first.data.music.id;
+
+    const publicList = await request(base, '/api/music');
+    assert.equal(publicList.response.status, 200);
+    assert.equal(publicList.data.scope, 'approved');
+    assert.equal(publicList.data.music.some((item) => item.id === pendingId), false);
+
+    const forbiddenPending = await request(base, '/api/music?scope=pending', { cookie: users.beta.cookie });
+    assert.equal(forbiddenPending.response.status, 403);
+
+    const pendingPreview = await fetch(`${base}/api/music/${pendingId}/audio`, {
+      headers: { Cookie: users.beta.cookie, Range: 'bytes=0-9' },
+    });
+    assert.equal(pendingPreview.status, 206);
+    assert.equal((await pendingPreview.arrayBuffer()).byteLength, 10);
+
+    const publicPreview = await fetch(`${base}/api/music/${pendingId}/audio`);
+    assert.equal(publicPreview.status, 404);
+
+    const adminMe = await request(base, '/api/auth/me', { cookie: users.admin.cookie });
+    assert.ok(adminMe.data.summary.unreadMessages >= 1);
+
+    const adminInbox = await request(base, '/api/conversations', { cookie: users.admin.cookie });
+    assert.ok(adminInbox.data.conversations.some((conversation) => conversation.other.id === users.beta.user.id));
+
+    const reviewQueue = await request(base, '/api/music?scope=pending', { cookie: users.admin.cookie });
+    assert.equal(reviewQueue.response.status, 200);
+    assert.ok(reviewQueue.data.music.some((item) => item.id === pendingId));
+
+    const approved = await request(base, `/api/music/${pendingId}/review`, {
+      method: 'POST',
+      cookie: users.admin.cookie,
+      body: { decision: 'approve' },
+    });
+    assert.equal(approved.response.status, 200);
+    assert.equal(approved.data.music.status, 'approved');
+
+    const publicAfter = await request(base, '/api/music');
+    const approvedItem = publicAfter.data.music.find((item) => item.id === pendingId);
+    assert.ok(approvedItem);
+    assert.equal(approvedItem.canListen, true);
+
+    const publicStream = await fetch(`${base}/api/music/${pendingId}/audio`, {
+      headers: { Range: 'bytes=0-9' },
+    });
+    assert.equal(publicStream.status, 206);
+    assert.match(publicStream.headers.get('content-range') || '', /^bytes 0-9\//);
+
+    const betaMe = await request(base, '/api/auth/me', { cookie: users.beta.cookie });
+    assert.ok(betaMe.data.summary.unreadMessages >= 1);
+
+    const second = await uploadMusic(base, users.beta.cookie, {
+      title: '不通过的测试曲',
+      artist: '测试歌手',
+      genre: '其他',
+    }, audio);
+    assert.equal(second.response.status, 201);
+    const rejected = await request(base, `/api/music/${second.data.music.id}/review`, {
+      method: 'POST',
+      cookie: users.admin.cookie,
+      body: { decision: 'reject', note: '音频质量不符合上架标准' },
+    });
+    assert.equal(rejected.response.status, 200);
+    assert.equal(rejected.data.music.status, 'rejected');
+
+    const mine = await request(base, '/api/music?scope=mine', { cookie: users.beta.cookie });
+    const rejectedItem = mine.data.music.find((item) => item.id === second.data.music.id);
+    assert.ok(rejectedItem);
+    assert.equal(rejectedItem.reviewNote, '音频质量不符合上架标准');
+
+    const adminUpload = await uploadMusic(base, users.admin.cookie, {
+      title: '管理员直接上架',
+      artist: '离岛',
+      genre: '氛围',
+    }, audio);
+    assert.equal(adminUpload.response.status, 201);
+    assert.equal(adminUpload.data.music.status, 'approved');
+    assert.equal(adminUpload.data.pending, false);
+
+    const forbiddenDelete = await request(base, `/api/music/${pendingId}/delete`, {
+      method: 'POST',
+      cookie: users.beta.cookie,
+      body: {},
+    });
+    assert.equal(forbiddenDelete.response.status, 403);
+
+    const unknownDelete = await request(base, '/api/music/not-a-real-track/delete', {
+      method: 'POST',
+      cookie: users.admin.cookie,
+      body: {},
+    });
+    assert.equal(unknownDelete.response.status, 404);
+
+    const uploadedFile = forum.db
+      .prepare('SELECT file_name FROM music WHERE id = ?')
+      .get(adminUpload.data.music.id);
+    const uploadedPath = path.join(tempDir, 'music', uploadedFile.file_name);
+    assert.equal(fs.existsSync(uploadedPath), true);
+
+    const deletedMusic = await request(base, `/api/music/${adminUpload.data.music.id}/delete`, {
+      method: 'POST',
+      cookie: users.admin.cookie,
+      body: {},
+    });
+    assert.equal(deletedMusic.response.status, 200);
+    assert.equal(deletedMusic.data.ok, true);
+    assert.equal(fs.existsSync(uploadedPath), false);
+
+    const publicAfterDelete = await request(base, '/api/music');
+    assert.equal(publicAfterDelete.data.music.some((item) => item.id === adminUpload.data.music.id), false);
+    const deletedAudio = await fetch(`${base}/api/music/${adminUpload.data.music.id}/audio`);
+    assert.equal(deletedAudio.status, 404);
   });
 
   await t.test('logs out and invalidates the session', async () => {

@@ -1,6 +1,6 @@
 'use strict';
 
-const CACHE_NAME = 'islands-forum-v8';
+const CACHE_NAME = 'islands-forum-v10';
 const CORE_ASSETS = [
   '/',
   '/styles.css',

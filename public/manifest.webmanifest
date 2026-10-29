@@ -42,6 +42,12 @@
       "short_name": "私信",
       "url": "/messages",
       "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "离岛电台",
+      "short_name": "音乐",
+      "url": "/music",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
     }
   ]
 }

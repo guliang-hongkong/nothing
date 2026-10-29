@@ -85,6 +85,26 @@ function migrate(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_likes_target ON likes(target_type, target_id);
 
+    CREATE TABLE IF NOT EXISTS music (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      artist TEXT NOT NULL,
+      genre TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '',
+      duration REAL NOT NULL DEFAULT 0,
+      file_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      file_size INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+      review_note TEXT NOT NULL DEFAULT '',
+      reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL,
+      reviewed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_music_status ON music(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_music_user ON music(user_id, created_at DESC);
+
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
       user_a_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

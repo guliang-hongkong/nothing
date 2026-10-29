@@ -33,6 +33,7 @@
     pickerTimer: null,
     pickerToken: 0,
     pendingAction: null,
+    musicFileDuration: 0,
   };
 
   const compactFormatter = new Intl.NumberFormat('zh-CN', {
@@ -46,6 +47,7 @@
   async function init() {
     applyTheme(readTheme());
     bindEvents();
+    setupMusicPlayer();
     updateChrome();
 
     try {
@@ -117,6 +119,17 @@
 
   function formatNumber(value) {
     return numberFormatter.format(Number(value) || 0);
+  }
+
+  function formatDuration(value) {
+    const total = Math.max(0, Math.round(Number(value) || 0));
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+  }
+
+  function formatFileSize(bytes) {
+    const size = Number(bytes) || 0;
+    if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   function asDate(value) {
@@ -306,6 +319,10 @@
     if ((match = path.match(/^\/messages\/([^/]+)$/))) {
       return { name: 'messages', conversationId: safeDecode(match[1]) };
     }
+    if (path === '/music') {
+      const tab = ['mine', 'review'].includes(params.get('tab')) ? params.get('tab') : 'all';
+      return { name: 'music', tab };
+    }
     if ((match = path.match(/^\/u\/([^/]+)$/))) {
       return { name: 'profile', userId: safeDecode(match[1]) };
     }
@@ -353,6 +370,8 @@
         await renderTopic(route, token);
       } else if (route.name === 'messages') {
         await renderMessages(route, token);
+      } else if (route.name === 'music') {
+        await renderMusic(route, token);
       } else if (route.name === 'profile') {
         await renderProfile(route, token);
       } else if (route.name === 'search') {
@@ -385,9 +404,11 @@
   }
 
   function cleanupView() {
+    const wasMusic = state.route?.name === 'music';
     document.body.classList.remove('chat-mode');
     state.activeConversationId = null;
     state.activeOther = null;
+    if (wasMusic && location.pathname !== '/music') closeMusicPlayer();
     closeUserMenu();
     if (state.pickerTimer) {
       clearTimeout(state.pickerTimer);
@@ -399,13 +420,11 @@
     const route = state.route || parseRoute();
     document.querySelectorAll('[data-nav]').forEach((element) => {
       const nav = element.dataset.nav;
-      const inMobileBar = Boolean(element.closest('.mobile-tabbar'));
       let active = false;
       if (nav === 'home') {
-        active = route.name === 'home' || route.name === 'category';
-        if (route.name === 'search' && !inMobileBar) active = true;
-      } else if (nav === 'search') {
-        active = route.name === 'search';
+        active = route.name === 'home' || route.name === 'category' || route.name === 'search';
+      } else if (nav === 'music') {
+        active = route.name === 'music';
       } else if (nav === 'messages') {
         active = route.name === 'messages';
       } else if (nav === 'profile') {
@@ -442,6 +461,7 @@
           </div>
           <a href="/u/${encodeURIComponent(state.me.id)}" data-link role="menuitem">${icon('user')}我的主页</a>
           <a href="/messages" data-link role="menuitem">${icon('message')}私信${unread ? `<span class="menu-count">${unread > 99 ? '99+' : unread}</span>` : ''}</a>
+          <a href="/music" data-link role="menuitem">${icon('music')}音乐</a>
           <a href="/search" data-link role="menuitem">${icon('search')}发现话题</a>
           <div class="menu-separator"></div>
           <button type="button" class="danger" data-action="logout" role="menuitem">${icon('logout')}退出登录</button>
@@ -682,6 +702,7 @@
           ${contentHead}
           <div class="feed-toolbar">
             <nav class="segmented" aria-label="排序方式">${sortTabs}</nav>
+            <a class="mobile-search-link" href="/search" data-link aria-label="搜索话题">${icon('search')}</a>
             <span class="feed-count">共 ${formatNumber(pagination.total)} 个话题</span>
           </div>
           <div class="topic-list" id="topic-list">
@@ -899,11 +920,20 @@
 
   function renderMessageRow(message, other) {
     const sender = message.mine ? state.me : other;
+    const isReviewRequest = String(message.content).startsWith('[音乐审批申请]');
+    const isReviewResult = String(message.content).startsWith('[音乐审批]');
+    let messageAction = '';
+    if (isReviewRequest && state.me?.isAdmin) {
+      messageAction = '<a class="msg-action" href="/music?tab=review" data-link>打开待审批 →</a>';
+    } else if (isReviewResult && !state.me?.isAdmin) {
+      messageAction = '<a class="msg-action" href="/music?tab=mine" data-link>查看我的投稿 →</a>';
+    }
     return `
       <div class="msg-row${message.mine ? ' mine' : ''}" data-message-id="${escapeHtml(message.id)}">
         ${avatar(sender, 'sm')}
         <div class="msg-stack">
           <div class="msg-bubble">${escapeHtml(message.content)}</div>
+          ${messageAction}
           <div class="msg-time">${clockTime(message.createdAt)}</div>
         </div>
       </div>
@@ -1240,6 +1270,653 @@
   }
 
   /* ------------------------------------------------------------------------
+     Music
+     ------------------------------------------------------------------------ */
+
+  function musicStatusLabel(status) {
+    return status === 'approved' ? '已上架' : status === 'rejected' ? '未通过' : '待审批';
+  }
+
+  function musicCoverMarkup(music) {
+    let hash = 0;
+    for (const char of String(music.id || music.title || '?')) {
+      hash = (hash * 31 + char.codePointAt(0)) >>> 0;
+    }
+    return `<span class="music-cover music-cover-${hash % 4}" aria-hidden="true"><span>${escapeHtml(firstChar(music.title))}</span>${icon('music')}</span>`;
+  }
+
+  function renderMusicCard(music, context) {
+    const canReview = context === 'pending' && state.me?.isAdmin;
+    const ownerUrl = `/u/${encodeURIComponent(music.submitter.id)}`;
+    return `
+      <article class="music-card music-status-${music.status}" data-music-card="${escapeHtml(music.id)}">
+        <div class="music-card-main">
+          ${musicCoverMarkup(music)}
+          <div class="music-card-copy">
+            <div class="music-card-kicker">
+              ${music.genre ? `<span class="chip">${escapeHtml(music.genre)}</span>` : ''}
+              <span class="music-status">${musicStatusLabel(music.status)}</span>
+            </div>
+            <h2>${escapeHtml(music.title)}</h2>
+            <div class="music-card-artist">${escapeHtml(music.artist)}</div>
+            ${music.description ? `<p class="music-card-description">${escapeHtml(music.description)}</p>` : ''}
+            <div class="music-card-meta">
+              由 <a href="${ownerUrl}" data-link>${escapeHtml(music.submitter.displayName)}</a> 提交
+              <span>·</span> ${timeAgo(music.createdAt)}
+              <span>·</span> ${formatDuration(music.duration)}
+            </div>
+          </div>
+          <div class="music-card-side">
+            ${
+              music.canListen
+                ? `<button class="music-play-button" type="button" data-action="play-music" data-music-id="${escapeHtml(music.id)}" data-audio="${escapeHtml(music.audioUrl)}" data-title="${escapeHtml(music.title)}" data-artist="${escapeHtml(music.artist)}" data-duration="${Number(music.duration) || 0}" aria-label="${music.status === 'approved' ? '播放' : '试听'} ${escapeHtml(music.title)}">
+                    ${icon('play')}<span>${music.status === 'approved' ? '播放' : '试听'}</span>
+                  </button>`
+                : ''
+            }
+            ${
+              state.me?.isAdmin
+                ? `<button class="music-delete-button" type="button" data-action="delete-music" data-music-id="${escapeHtml(music.id)}" data-music-title="${escapeHtml(music.title)}" aria-label="删除音乐 ${escapeHtml(music.title)}" title="删除音乐">${icon('trash')}</button>`
+                : ''
+            }
+          </div>
+        </div>
+        ${
+          music.status === 'rejected' && music.reviewNote
+            ? `<div class="music-review-note">审核说明：${escapeHtml(music.reviewNote)}</div>`
+            : ''
+        }
+        ${
+          canReview
+            ? `<div class="music-review-bar">
+                <span>${icon('message')}审批结果会通过私信通知投稿人</span>
+                <div>
+                  <button class="btn btn-primary btn-sm" type="button" data-action="approve-music" data-music-id="${escapeHtml(music.id)}" data-music-title="${escapeHtml(music.title)}">通过并上架</button>
+                  <button class="btn btn-ghost btn-sm" type="button" data-action="reject-music" data-music-id="${escapeHtml(music.id)}" data-music-title="${escapeHtml(music.title)}">拒绝</button>
+                </div>
+              </div>`
+            : ''
+        }
+      </article>
+    `;
+  }
+
+  function renderMusicGate(title, message, showLogin = false) {
+    main.innerHTML = `
+      <div class="music-page">
+        <div class="state-card">
+          <span class="state-icon">${icon('music')}</span>
+          <h3>${escapeHtml(title)}</h3>
+          <p>${escapeHtml(message)}</p>
+          ${
+            showLogin
+              ? `<button class="btn btn-primary" type="button" data-action="open-auth" data-mode="login">登录后继续</button>`
+              : `<a class="btn btn-soft" href="/music" data-link>回到音乐</a>`
+          }
+        </div>
+      </div>
+    `;
+    document.title = "音乐 · Island's forum";
+  }
+
+  async function renderMusic(route, token) {
+    const scope = route.tab === 'mine' ? 'mine' : route.tab === 'review' ? 'pending' : 'approved';
+    if (route.tab === 'mine' && !state.me) {
+      renderMusicGate('登录后查看我的投稿', '登录后可以查看自己提交的音乐，以及管理员给出的审核结果。', true);
+      return;
+    }
+    if (route.tab === 'review' && !state.me?.isAdmin) {
+      renderMusicGate('这里只有管理员可以进入', '音乐投稿会通过私信通知管理员，由管理员在这里试听和审批。', !state.me);
+      return;
+    }
+
+    const data = await api(`/api/music?scope=${scope}&pageSize=24`);
+    if (isStale(token)) return;
+    const items = data.music || [];
+    const counts = data.counts || { approved: 0, mine: 0, pending: 0 };
+    const isAdmin = Boolean(state.me?.isAdmin);
+    const tabs = [
+      `<a class="music-tab${scope === 'approved' ? ' is-active' : ''}" href="/music" data-link>全部音乐 <span>${formatCount(counts.approved)}</span></a>`,
+      state.me
+        ? `<a class="music-tab${scope === 'mine' ? ' is-active' : ''}" href="/music?tab=mine" data-link>我的投稿 <span>${formatCount(counts.mine)}</span></a>`
+        : '',
+      isAdmin
+        ? `<a class="music-tab${scope === 'pending' ? ' is-active' : ''}" href="/music?tab=review" data-link>待审批 <span>${formatCount(counts.pending)}</span></a>`
+        : '',
+    ].join('');
+
+    const emptyTitle =
+      scope === 'mine' ? '你还没有投过音乐' : scope === 'pending' ? '暂时没有待审批的音乐' : '岛上还没有音乐';
+    const emptyMessage =
+      scope === 'mine'
+        ? '上传一首喜欢的歌，管理员审批通过后就会出现在离岛电台。'
+        : scope === 'pending'
+          ? '新的投稿会以私信通知你，这里会显示等待试听的音乐。'
+          : '成为第一个把音乐留在岛上的人。管理员上传会直接上架，其他投稿需要审批。';
+
+    main.innerHTML = `
+      <div class="music-page">
+        <section class="hero music-hero">
+          <div class="hero-content">
+            <div class="eyebrow">${icon('music')} ISLAND RADIO</div>
+            <h1>离岛电台</h1>
+            <p>把喜欢的歌留在岛上。<br>管理员上传即上架；其他投稿先私信管理员，审批后公开。</p>
+            <div class="hero-actions">
+              <button class="btn btn-lg btn-cream" type="button" data-action="music-upload">${icon('upload')}${isAdmin ? '上架音乐' : '上传音乐'}</button>
+              <span class="hero-footnote">${formatCount(counts.approved)} 首音乐正在岛上播放</span>
+            </div>
+          </div>
+          <div class="hero-orbit" aria-hidden="true"><span></span><span></span><span>${icon('music')}</span></div>
+        </section>
+
+        <div class="music-toolbar">
+          <nav class="music-tabs" aria-label="音乐分类">${tabs}</nav>
+          <span class="music-total">${formatNumber(data.pagination?.total || 0)} 首</span>
+        </div>
+
+        ${
+          scope === 'pending'
+            ? `<div class="music-review-hint">${icon('message')}投稿申请已通过私信发送给管理员；审批结果也会私信通知投稿人。</div>`
+            : ''
+        }
+
+        <div class="music-list">
+          ${
+            items.length
+              ? items.map((music) => renderMusicCard(music, scope)).join('')
+              : `<div class="state-card music-empty">
+                  <span class="state-icon">${icon('music')}</span>
+                  <h3>${emptyTitle}</h3>
+                  <p>${emptyMessage}</p>
+                  ${
+                    scope === 'pending'
+                      ? ''
+                      : `<button class="btn btn-primary" type="button" data-action="music-upload">${icon('upload')}上传音乐</button>`
+                  }
+                </div>`
+          }
+        </div>
+      </div>
+    `;
+    document.title = "音乐 · Island's forum";
+  }
+
+  function updatePlayerProgress() {
+    const audio = document.getElementById('audio-engine');
+    const seek = document.getElementById('music-player-seek');
+    const current = document.getElementById('music-player-current');
+    const duration = document.getElementById('music-player-duration');
+    if (!audio || !seek || !current || !duration) return;
+    const total = Number.isFinite(audio.duration) ? audio.duration : 0;
+    if (total > 0) {
+      seek.max = String(total);
+      seek.value = String(Math.min(audio.currentTime, total));
+      duration.textContent = formatDuration(total);
+    }
+    current.textContent = formatDuration(audio.currentTime);
+  }
+
+  function setupMusicPlayer() {
+    const audio = document.getElementById('audio-engine');
+    const player = document.getElementById('music-player');
+    const seek = document.getElementById('music-player-seek');
+    if (!audio || !player || !seek) return;
+
+    audio.addEventListener('play', () => {
+      player.classList.add('is-playing');
+      player.hidden = false;
+    });
+    audio.addEventListener('pause', () => player.classList.remove('is-playing'));
+    audio.addEventListener('loadedmetadata', updatePlayerProgress);
+    audio.addEventListener('timeupdate', updatePlayerProgress);
+    audio.addEventListener('ended', () => {
+      player.classList.remove('is-playing');
+      updatePlayerProgress();
+    });
+    audio.addEventListener('error', () => {
+      if (!audio.currentSrc) return;
+      toast('音频加载失败，请稍后再试', { type: 'error' });
+      player.classList.remove('is-playing');
+    });
+    seek.addEventListener('input', () => {
+      if (Number.isFinite(audio.duration)) audio.currentTime = Number(seek.value);
+      updatePlayerProgress();
+    });
+  }
+
+  function playMusicFromButton(button) {
+    const player = document.getElementById('music-player');
+    const audio = document.getElementById('audio-engine');
+    const seek = document.getElementById('music-player-seek');
+    if (!player || !audio) return;
+    const id = button.dataset.musicId;
+    if (player.dataset.currentMusicId === id) {
+      if (audio.paused) {
+        audio.play().catch(() => toast('暂时无法播放这首音乐', { type: 'error' }));
+      } else {
+        audio.pause();
+      }
+      return;
+    }
+
+    player.dataset.currentMusicId = id;
+    document.getElementById('music-player-title').textContent = button.dataset.title || '未命名音乐';
+    document.getElementById('music-player-artist').textContent = button.dataset.artist || '';
+    document.getElementById('music-player-cover').textContent = firstChar(button.dataset.title || '音');
+    document.getElementById('music-player-current').textContent = '0:00';
+    document.getElementById('music-player-duration').textContent = formatDuration(button.dataset.duration);
+    if (seek) {
+      seek.value = '0';
+      seek.max = button.dataset.duration || '100';
+    }
+    audio.preload = 'auto';
+    audio.src = button.dataset.audio;
+    audio.load();
+    player.hidden = false;
+    document.body.classList.add('has-music-player');
+    audio.play().catch(() => toast('暂时无法播放这首音乐', { type: 'error' }));
+    updatePlayerProgress();
+  }
+
+  function toggleMusicPlay() {
+    const audio = document.getElementById('audio-engine');
+    if (!audio || !audio.currentSrc) return;
+    if (audio.paused) audio.play().catch(() => toast('暂时无法播放这首音乐', { type: 'error' }));
+    else audio.pause();
+  }
+
+  function closeMusicPlayer() {
+    const audio = document.getElementById('audio-engine');
+    const player = document.getElementById('music-player');
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+    }
+    if (player) {
+      player.hidden = true;
+      player.classList.remove('is-playing');
+      delete player.dataset.currentMusicId;
+    }
+    document.body.classList.remove('has-music-player');
+  }
+
+  /* ------------------------------------------------------------------------
+     Music upload and review
+     ------------------------------------------------------------------------ */
+
+  const MUSIC_EXTENSION_TYPES = {
+    mp3: 'audio/mpeg',
+    m4a: 'audio/mp4',
+    aac: 'audio/aac',
+    wav: 'audio/wav',
+    ogg: 'audio/ogg',
+    oga: 'audio/ogg',
+    opus: 'audio/opus',
+    weba: 'audio/webm',
+    webm: 'audio/webm',
+    flac: 'audio/flac',
+  };
+
+  function musicFileType(file) {
+    if (file.type && MUSIC_TYPES_CLIENT.has(file.type)) return file.type;
+    const extension = String(file.name || '').split('.').pop().toLowerCase();
+    return MUSIC_EXTENSION_TYPES[extension] || '';
+  }
+
+  const MUSIC_TYPES_CLIENT = new Set([
+    'audio/mpeg',
+    'audio/mp3',
+    'audio/mp4',
+    'audio/x-m4a',
+    'audio/aac',
+    'audio/wav',
+    'audio/x-wav',
+    'audio/ogg',
+    'audio/opus',
+    'audio/webm',
+    'audio/flac',
+    'audio/x-flac',
+  ]);
+
+  function audioDuration(file) {
+    return new Promise((resolve) => {
+      const audio = new Audio();
+      const url = URL.createObjectURL(file);
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        URL.revokeObjectURL(url);
+        resolve(value);
+      };
+      audio.preload = 'metadata';
+      audio.addEventListener('loadedmetadata', () => finish(Number.isFinite(audio.duration) ? audio.duration : 0));
+      audio.addEventListener('error', () => finish(0));
+      setTimeout(() => finish(0), 5000);
+      audio.src = url;
+    });
+  }
+
+  async function handleMusicFile(input) {
+    const file = input.files?.[0];
+    const name = document.getElementById('music-file-name');
+    const meta = document.getElementById('music-file-meta');
+    const drop = document.getElementById('music-file-drop');
+    if (!name || !meta || !drop) return;
+    state.musicFileDuration = 0;
+    drop.classList.remove('has-file', 'has-error');
+    if (!file) {
+      name.textContent = '选择音频文件';
+      meta.textContent = 'MP3 / M4A / WAV / OGG / FLAC，最大 25MB';
+      return;
+    }
+    if (!musicFileType(file)) {
+      input.value = '';
+      drop.classList.add('has-error');
+      name.textContent = '格式不支持';
+      meta.textContent = '请选择 MP3、M4A、WAV、OGG 或 FLAC 音频文件';
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      input.value = '';
+      drop.classList.add('has-error');
+      name.textContent = file.name;
+      meta.textContent = '文件超过 25MB，请压缩后再上传';
+      return;
+    }
+    drop.classList.add('has-file');
+    name.textContent = file.name;
+    meta.textContent = `${formatFileSize(file.size)} · 正在读取时长…`;
+    const duration = await audioDuration(file);
+    state.musicFileDuration = duration;
+    if (!document.getElementById('music-file-name')) return;
+    meta.textContent = `${formatFileSize(file.size)}${duration ? ` · ${formatDuration(duration)}` : ''}`;
+  }
+
+  function openMusicUpload() {
+    if (!ensureAuth()) {
+      state.pendingAction = 'music-upload';
+      return;
+    }
+    state.musicFileDuration = 0;
+    openModal(
+      `
+      <button class="modal-close" type="button" data-action="close-modal" aria-label="关闭">${icon('close')}</button>
+      <div class="modal-eyebrow">ISLAND RADIO</div>
+      <h2 id="music-upload-title">上传一首音乐</h2>
+      <p class="modal-subtitle">${state.me.isAdmin ? '管理员上传后会直接上架，所有人都可以听。' : '提交后会先私信管理员审批，通过后所有人都可以听。'}</p>
+      <form id="music-upload-form" class="form-grid" novalidate>
+        <label class="file-drop" id="music-file-drop" for="music-file">
+          <input type="file" id="music-file" accept=".mp3,.m4a,.aac,.wav,.ogg,.oga,.opus,.weba,.webm,.flac,audio/*">
+          <span class="file-drop-icon">${icon('upload')}</span>
+          <strong id="music-file-name">选择音频文件</strong>
+          <span id="music-file-meta">MP3 / M4A / WAV / OGG / FLAC，最大 25MB</span>
+        </label>
+        <div class="form-row">
+          <div class="field">
+            <label class="field-label" for="music-title">歌曲名</label>
+            <input class="input" id="music-title" name="title" type="text" maxlength="80" placeholder="例如：潮汐来信">
+          </div>
+          <div class="field">
+            <label class="field-label" for="music-artist">歌手</label>
+            <input class="input" id="music-artist" name="artist" type="text" maxlength="60" placeholder="歌手或演奏者">
+          </div>
+        </div>
+        <div class="field">
+          <label class="field-label" for="music-genre">分类 <small>可选</small></label>
+          <select class="select" id="music-genre" name="genre">
+            <option value="">未分类</option>
+            <option value="氛围">氛围</option>
+            <option value="电子">电子</option>
+            <option value="民谣">民谣</option>
+            <option value="摇滚">摇滚</option>
+            <option value="古典">古典</option>
+            <option value="其他">其他</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field-label" for="music-description">介绍 <small>可选，最多 500 字</small></label>
+          <textarea class="textarea music-description" id="music-description" name="description" maxlength="500" placeholder="写下这首歌的故事，或者为什么想把它留在岛上。"></textarea>
+        </div>
+        <p class="form-error" id="music-upload-error" hidden></p>
+        <div class="form-actions">
+          <button class="btn btn-ghost" type="button" data-action="close-modal">取消</button>
+          <button class="btn btn-primary" type="submit">${state.me.isAdmin ? '上架音乐' : '提交审批'}</button>
+        </div>
+      </form>
+      `,
+      { wide: true, label: 'music-upload-title' },
+    );
+    setTimeout(() => document.getElementById('music-title')?.focus({ preventScroll: true }), 120);
+  }
+
+  async function uploadMusicRaw(file, metadata) {
+    const params = new URLSearchParams(metadata);
+    let response;
+    try {
+      response = await fetch(`/api/music/upload?${params.toString()}`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': musicFileType(file) || 'application/octet-stream' },
+        body: file,
+      });
+    } catch {
+      const error = new Error('上传失败，请检查网络后重试');
+      error.status = 0;
+      throw error;
+    }
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+    if (!response.ok) {
+      const error = new Error(data?.error || '上传失败，请稍后再试');
+      error.status = response.status;
+      throw error;
+    }
+    return data;
+  }
+
+  async function submitMusicUpload(form) {
+    const submit = form.querySelector('[type="submit"]');
+    const file = document.getElementById('music-file')?.files?.[0];
+    const values = new FormData(form);
+    const title = String(values.get('title') || '').trim();
+    const artist = String(values.get('artist') || '').trim();
+    const genre = String(values.get('genre') || '');
+    const description = String(values.get('description') || '').trim();
+    clearFormError(form);
+    if (!file) {
+      showFormError(form, '请先选择一个音频文件');
+      return;
+    }
+    if (!musicFileType(file)) {
+      showFormError(form, '暂不支持这种音频格式');
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      showFormError(form, '音频文件不能超过 25MB');
+      return;
+    }
+    if (!title) {
+      showFormError(form, '请填写歌曲名');
+      form.elements.title.focus();
+      return;
+    }
+    if (!artist) {
+      showFormError(form, '请填写歌手');
+      form.elements.artist.focus();
+      return;
+    }
+
+    setBusy(submit, true, state.me.isAdmin ? '正在上架…' : '正在提交…');
+    try {
+      const data = await uploadMusicRaw(file, {
+        title,
+        artist,
+        genre,
+        description,
+        duration: state.musicFileDuration || '',
+      });
+      closeModal();
+      if (data.pending) {
+        toast('投稿已提交，审批申请已私信管理员', { iconName: 'message' });
+        navigate('/music?tab=mine');
+      } else {
+        toast('音乐已上架');
+        navigate('/music');
+      }
+    } catch (error) {
+      if (error.status === 401) {
+        state.me = null;
+        state.summary = { unreadMessages: 0 };
+        updateChrome();
+        closeModal();
+        openAuth('login');
+        state.pendingAction = 'music-upload';
+        return;
+      }
+      showFormError(form, error.message || '上传失败，请稍后再试');
+    } finally {
+      setBusy(submit, false);
+    }
+  }
+
+  async function approveMusic(button) {
+    if (!state.me?.isAdmin) return;
+    const id = button.dataset.musicId;
+    setBusy(button, true, '通过中…');
+    try {
+      await api(`/api/music/${encodeURIComponent(id)}/review`, {
+        method: 'POST',
+        body: { decision: 'approve' },
+      });
+      toast('已通过审核，结果已私信投稿人');
+      await renderRoute({ keepScroll: true });
+    } catch (error) {
+      toast(error.message || '操作失败，请稍后再试', { type: 'error' });
+    } finally {
+      if (button.isConnected) setBusy(button, false);
+    }
+  }
+
+  function openRejectMusicModal(button) {
+    if (!state.me?.isAdmin) return;
+    const musicId = button.dataset.musicId;
+    const musicTitle = button.dataset.musicTitle || '这首音乐';
+    openModal(
+      `
+      <button class="modal-close" type="button" data-action="close-modal" aria-label="关闭">${icon('close')}</button>
+      <div class="modal-eyebrow">MUSIC REVIEW</div>
+      <h2 id="reject-music-title">拒绝这首音乐？</h2>
+      <p class="modal-subtitle">《${escapeHtml(musicTitle)}》不会公开，拒绝原因会通过私信发给投稿人。</p>
+      <div class="field" style="margin-top: 18px">
+        <label class="field-label" for="reject-music-note">拒绝原因</label>
+        <textarea class="textarea music-description" id="reject-music-note" maxlength="300" placeholder="例如：音频质量不符合上架标准"></textarea>
+      </div>
+      <p class="form-error" id="reject-music-error" hidden></p>
+      <div class="form-actions">
+        <button class="btn btn-ghost" type="button" data-action="close-modal">取消</button>
+        <button class="btn btn-primary" type="button" data-action="confirm-reject-music" data-music-id="${escapeHtml(musicId)}">${icon('trash')}确认拒绝</button>
+      </div>
+      `,
+      { label: 'reject-music-title' },
+    );
+    setTimeout(() => document.getElementById('reject-music-note')?.focus({ preventScroll: true }), 120);
+  }
+
+  async function confirmRejectMusic(button) {
+    if (!state.me?.isAdmin) return;
+    const note = String(document.getElementById('reject-music-note')?.value || '').trim();
+    const errorBox = document.getElementById('reject-music-error');
+    if (!note) {
+      if (errorBox) {
+        errorBox.textContent = '请填写拒绝原因';
+        errorBox.hidden = false;
+      }
+      return;
+    }
+    setBusy(button, true, '正在处理…');
+    try {
+      await api(`/api/music/${encodeURIComponent(button.dataset.musicId)}/review`, {
+        method: 'POST',
+        body: { decision: 'reject', note },
+      });
+      closeModal();
+      toast('已拒绝投稿，结果已私信投稿人');
+      await renderRoute({ keepScroll: true });
+    } catch (error) {
+      if (errorBox) {
+        errorBox.textContent = error.message || '操作失败，请稍后再试';
+        errorBox.hidden = false;
+      } else {
+        toast(error.message || '操作失败，请稍后再试', { type: 'error' });
+      }
+    } finally {
+      if (button.isConnected) setBusy(button, false);
+    }
+  }
+
+  function openDeleteMusicModal(button) {
+    if (!state.me?.isAdmin) {
+      toast('只有管理员可以删除音乐', { type: 'error' });
+      return;
+    }
+    const musicId = button.dataset.musicId;
+    const musicTitle = button.dataset.musicTitle || '这首音乐';
+    openModal(
+      `
+      <button class="modal-close" type="button" data-action="close-modal" aria-label="关闭">${icon('close')}</button>
+      <div class="modal-eyebrow">ADMIN ACTION</div>
+      <h2 id="delete-music-title">删除这首音乐？</h2>
+      <p class="modal-subtitle">《${escapeHtml(musicTitle)}》会从音乐页面永久移除，对应的音频文件也会被删除。</p>
+      <div class="delete-warning">${icon('trash')}<span>删除后无法恢复，正在播放的设备也会中断。</span></div>
+      <p class="form-error" id="delete-music-error" hidden></p>
+      <div class="form-actions">
+        <button class="btn btn-ghost" type="button" data-action="close-modal">取消</button>
+        <button class="btn btn-danger" type="button" data-action="confirm-delete-music" data-music-id="${escapeHtml(musicId)}">${icon('trash')}确认删除</button>
+      </div>
+      `,
+      { label: 'delete-music-title' },
+    );
+  }
+
+  async function confirmDeleteMusic(button) {
+    if (!state.me?.isAdmin) return;
+    const musicId = button.dataset.musicId;
+    const errorBox = document.getElementById('delete-music-error');
+    const player = document.getElementById('music-player');
+    if (player?.dataset.currentMusicId === musicId) closeMusicPlayer();
+    setBusy(button, true, '正在删除…');
+    try {
+      await api(`/api/music/${encodeURIComponent(musicId)}/delete`, { method: 'POST', body: {} });
+      closeModal();
+      toast('音乐已删除');
+      await renderRoute({ keepScroll: true });
+    } catch (error) {
+      if (error.status === 401) {
+        state.me = null;
+        state.summary = { unreadMessages: 0 };
+        updateChrome();
+        closeModal();
+        openAuth('login');
+        return;
+      }
+      if (errorBox) {
+        errorBox.textContent = error.message || '删除失败，请稍后再试';
+        errorBox.hidden = false;
+      } else {
+        toast(error.message || '删除失败，请稍后再试', { type: 'error' });
+      }
+    } finally {
+      if (button.isConnected) setBusy(button, false);
+    }
+  }
+
+  /* ------------------------------------------------------------------------
      Search
      ------------------------------------------------------------------------ */
 
@@ -1464,6 +2141,7 @@
     state.pendingAction = null;
     await renderRoute({ keepScroll: true });
     if (pending === 'compose') setTimeout(openCompose, 50);
+    if (pending === 'music-upload') setTimeout(openMusicUpload, 50);
   }
 
   async function logout() {
@@ -1473,6 +2151,7 @@
       // Clear the local state even if the network call failed.
     }
     disconnectSSE();
+    closeMusicPlayer();
     state.me = null;
     state.summary = { unreadMessages: 0 };
     updateChrome();
@@ -2252,6 +2931,17 @@
         event.preventDefault();
         submitChat(form);
       }
+      if (form.id === 'music-upload-form') {
+        event.preventDefault();
+        submitMusicUpload(form);
+      }
+    });
+
+    document.addEventListener('change', (event) => {
+      const target = event.target;
+      if (target instanceof HTMLInputElement && target.id === 'music-file') {
+        handleMusicFile(target);
+      }
     });
 
     document.addEventListener('input', (event) => {
@@ -2368,6 +3058,33 @@
         break;
       case 'copy-link':
         await copyCurrentLink();
+        break;
+      case 'music-upload':
+        openMusicUpload();
+        break;
+      case 'play-music':
+        playMusicFromButton(element);
+        break;
+      case 'toggle-music-play':
+        toggleMusicPlay();
+        break;
+      case 'close-music-player':
+        closeMusicPlayer();
+        break;
+      case 'approve-music':
+        await approveMusic(element);
+        break;
+      case 'reject-music':
+        openRejectMusicModal(element);
+        break;
+      case 'confirm-reject-music':
+        await confirmRejectMusic(element);
+        break;
+      case 'delete-music':
+        openDeleteMusicModal(element);
+        break;
+      case 'confirm-delete-music':
+        await confirmDeleteMusic(element);
         break;
       case 'delete-topic':
         openDeleteTopicModal(element);

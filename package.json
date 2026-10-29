@@ -2,7 +2,7 @@
   "name": "islands-forum",
   "version": "1.0.0",
   "private": true,
-  "description": "Island's forum（离岛的论坛）— 支持登录、发帖、回复与私信的响应式社区",
+  "description": "Island's forum（离岛的论坛）— 支持登录、发帖、私信和审批制音乐电台的响应式社区",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -11,5 +11,8 @@
   },
   "engines": {
     "node": ">=24"
+  },
+  "dependencies": {
+    "@vercel/postgres": "^0.10.0"
   }
 }
